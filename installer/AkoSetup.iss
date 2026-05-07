@@ -29,7 +29,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "desktopicon"; Description: "바탕화면 바로가기 만들기"; GroupDescription: "추가 옵션:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\Ako-ai\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\Ako-ai\*"; DestDir: "{app}"; Excludes: "*.log,memory_state.json,Ako-ai_launcher.bat,requirements.txt"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\bootstrap_runtime.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Ako-ai_launcher.vbs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer_assets\{#PythonEmbedZip}"; DestDir: "{app}\runtime_assets"; Flags: ignoreversion
