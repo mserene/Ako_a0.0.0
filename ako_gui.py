@@ -656,7 +656,7 @@ class AkoGUI(tk.Tk):
         return VoiceConfig(
             device=None,
             samplerate=16000,
-            model=os.getenv("AKO_WHISPER_MODEL", "base"),
+            model=os.getenv("AKO_WHISPER_MODEL", "small"),
             language="ko",
             wake_word=os.getenv("AKO_WAKE_WORD", ""),
         )

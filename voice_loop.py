@@ -19,11 +19,11 @@ LogFn = Callable[[str], None]
 class VoiceConfig:
     device: Optional[int] = None
     samplerate: int = 16000
-    min_record_sec: float = 0.6
+    min_record_sec: float = 0.45
     max_record_sec: float = 10.0
-    silence_sec: float = 0.9
-    silence_threshold: float = 0.012
-    model: str = field(default_factory=lambda: os.getenv("AKO_WHISPER_MODEL", "base"))
+    silence_sec: float = 0.85
+    silence_threshold: float = 0.010
+    model: str = field(default_factory=lambda: os.getenv("AKO_WHISPER_MODEL", "small"))
     language: str = "ko"
     wake_word: str = field(default_factory=lambda: os.getenv("AKO_WAKE_WORD", ""))
     print_heard_audio_stats: bool = False
@@ -135,22 +135,45 @@ _whisper_lock = threading.Lock()
 
 
 def _get_whisper_model(model_name: str):
-    """WhisperModel을 캐싱해서 반환. 같은 모델명이면 재사용."""
+    """WhisperModel을 캐싱해서 반환. 같은 모델/장치/연산 타입이면 재사용."""
     with _whisper_lock:
-        if model_name not in _whisper_cache:
+        model_name = (model_name or "small").strip() or "small"
+        device = os.getenv("AKO_WHISPER_DEVICE", "cpu").strip().lower() or "cpu"
+        compute_type = os.getenv("AKO_WHISPER_COMPUTE_TYPE", "").strip()
+        if not compute_type:
+            compute_type = "float16" if device == "cuda" else "int8"
+
+        cache_key = (model_name, device, compute_type)
+        if cache_key not in _whisper_cache:
             try:
                 from faster_whisper import WhisperModel
-                _whisper_cache[model_name] = WhisperModel(
-                    model_name, device="cpu", compute_type="int8"
+                _whisper_cache[cache_key] = WhisperModel(
+                    model_name,
+                    device=device,
+                    compute_type=compute_type,
                 )
             except ImportError:
                 raise RuntimeError(
-                    "faster-whisper가 설치되어 있지 않아요.\n"
+                    "faster-whisper가 설치되어 있지 않아요."
                     "pip install faster-whisper"
                 )
             except Exception as e:
+                # CUDA 설정이 꼬인 PC에서도 프로그램이 죽지 않게 CPU로 한 번 더 시도한다.
+                if device == "cuda" and os.getenv("AKO_WHISPER_CUDA_FALLBACK", "1").lower() not in {"0", "false", "no", "off"}:
+                    try:
+                        from faster_whisper import WhisperModel
+                        fallback_key = (model_name, "cpu", "int8")
+                        _whisper_cache[fallback_key] = WhisperModel(
+                            model_name,
+                            device="cpu",
+                            compute_type="int8",
+                        )
+                        print(f"[VOICE] CUDA Whisper 로드 실패, CPU로 폴백합니다: {e}")
+                        return _whisper_cache[fallback_key]
+                    except Exception as e2:
+                        raise RuntimeError(f"Whisper 모델 로드 실패({model_name}): {e}; CPU 폴백 실패: {e2}")
                 raise RuntimeError(f"Whisper 모델 로드 실패({model_name}): {e}")
-        return _whisper_cache[model_name]
+        return _whisper_cache[cache_key]
 
 
 def clear_whisper_cache():
@@ -238,13 +261,122 @@ def _record_until_silence(cfg: VoiceConfig):
     return np.concatenate(frames, axis=0)
 
 
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        return max(1, value)
+    except ValueError:
+        return default
+
+
+def _build_stt_initial_prompt() -> str:
+    """짧은 한국어 PC 명령에서 앱 이름이 뭉개지지 않게 Whisper에 힌트를 준다."""
+    aliases = [
+        "크롬", "구글 크롬", "디스코드", "디코", "카카오톡", "카톡",
+        "스팀", "스포티파이", "메모장", "계산기", "그림판",
+        "라이엇", "롤", "리그 오브 레전드", "발로란트", "오비에스",
+    ]
+    try:
+        from command_actions import load_app_specs
+        specs = load_app_specs()
+        for spec in specs.values():
+            for alias in getattr(spec, "aliases", []) or []:
+                alias = str(alias).strip()
+                if alias and alias not in aliases and len(alias) <= 20:
+                    aliases.append(alias)
+    except Exception:
+        pass
+
+    # 너무 길면 오히려 느려져서 앞부분만 사용한다.
+    aliases = aliases[:60]
+    return "한국어 PC 음성 명령입니다. 앱 이름 후보: " + ", ".join(aliases) + ". 명령 예시: 크롬 띄워봐, 디스코드 켜줘."
+
+
+def _apply_stt_correction(text: str) -> str:
+    """STT 결과 후처리. 실패해도 원문을 그대로 돌려준다."""
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+    try:
+        from core.stt_corrections import correct_stt_text
+        corrected, reasons = correct_stt_text(raw, return_reasons=True)
+        if corrected != raw and os.getenv("AKO_STT_DEBUG_CORRECTION", "").lower() in {"1", "true", "yes", "on"}:
+            print(f"[VOICE] STT 보정: {raw} -> {corrected} ({', '.join(reasons)})")
+        return corrected
+    except Exception:
+        return raw
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 999) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        return max(minimum, min(maximum, value))
+    except Exception:
+        return default
+
+
+def _build_initial_prompt() -> str:
+    """Whisper에게 앱/명령 어휘를 미리 알려준다. 결과 치환이 아니라 디코딩 힌트다."""
+    extra = os.getenv("AKO_WHISPER_INITIAL_PROMPT", "").strip()
+    base = (
+        "다음은 한국어 PC 음성 명령입니다. "
+        "앱 이름으로 크롬, 구글 크롬, 디스코드, 디코, 카카오톡, 카톡, 스팀, "
+        "스포티파이, 메모장, 계산기, 유튜브, 롤, 리그 오브 레전드, 발로란트, OBS, "
+        "VS Code, 코드, 그림판, 탐색기가 나올 수 있습니다. "
+        "명령 표현으로 켜줘, 열어줘, 띄워봐, 실행해줘, 앞으로 가져와, 눌러줘, 클릭해줘, 검색해줘가 나올 수 있습니다."
+    )
+    return f"{base} {extra}".strip() if extra else base
+
+
+def _prepare_audio_for_stt(audio):
+    """마이크 입력을 Whisper가 듣기 쉬운 크기로 정리한다. 특정 단어 보정은 하지 않는다."""
+    import numpy as np
+
+    x = np.asarray(audio, dtype=np.float32)
+    if x.size == 0:
+        return x
+
+    x = np.nan_to_num(x)
+    x = x - float(np.mean(x))
+
+    rms = float((np.mean(x * x) + 1e-12) ** 0.5)
+    target_rms = float(os.getenv("AKO_WHISPER_TARGET_RMS", "0.06"))
+    max_gain = float(os.getenv("AKO_WHISPER_MAX_GAIN", "8.0"))
+
+    # 너무 작은 음성만 적당히 키운다. 이미 큰 음성은 건드리지 않는다.
+    if rms > 0 and rms < target_rms:
+        gain = min(max_gain, target_rms / rms)
+        x = x * gain
+
+    peak = float(np.max(np.abs(x))) if x.size else 0.0
+    if peak > 0.98:
+        x = x * (0.98 / peak)
+
+    if _env_bool("AKO_STT_DEBUG_AUDIO", False):
+        new_rms = float((np.mean(x * x) + 1e-12) ** 0.5)
+        new_peak = float(np.max(np.abs(x))) if x.size else 0.0
+        print(f"[VOICE] audio rms={rms:.4f}->{new_rms:.4f} peak={peak:.4f}->{new_peak:.4f}")
+
+    return x.astype(np.float32)
+
+
 # -----------------------------------------------------------------------------
 # STT
 # -----------------------------------------------------------------------------
 def _transcribe(audio, cfg: VoiceConfig) -> str:
-    """캐싱된 WhisperModel로 STT 수행."""
+    """캐싱된 WhisperModel로 STT 수행. 보정 치환 없이 인식 품질 설정만 강화한다."""
     import numpy as np
 
+    audio = _prepare_audio_for_stt(audio)
     if np.asarray(audio).size == 0:
         return ""
 
@@ -253,16 +385,46 @@ def _transcribe(audio, cfg: VoiceConfig) -> str:
     except RuntimeError as e:
         raise RuntimeError(str(e))
 
+    beam_size = _env_int("AKO_WHISPER_BEAM_SIZE", 5, minimum=1, maximum=10)
+    best_of = _env_int("AKO_WHISPER_BEST_OF", 5, minimum=1, maximum=10)
+    use_vad = _env_bool("AKO_WHISPER_VAD_FILTER", False)
+    use_prompt = _env_bool("AKO_WHISPER_USE_INITIAL_PROMPT", True)
+
+    kwargs = {
+        "language": (cfg.language or None),
+        "vad_filter": use_vad,
+        "beam_size": beam_size,
+        "best_of": best_of,
+        "temperature": 0.0,
+        "condition_on_previous_text": False,
+        "no_speech_threshold": float(os.getenv("AKO_WHISPER_NO_SPEECH_THRESHOLD", "0.35")),
+        "compression_ratio_threshold": float(os.getenv("AKO_WHISPER_COMPRESSION_RATIO_THRESHOLD", "2.4")),
+        "log_prob_threshold": float(os.getenv("AKO_WHISPER_LOG_PROB_THRESHOLD", "-1.0")),
+    }
+
+    if use_vad:
+        kwargs["vad_parameters"] = {
+            "min_silence_duration_ms": int(cfg.silence_sec * 1000),
+            "speech_pad_ms": int(os.getenv("AKO_WHISPER_VAD_SPEECH_PAD_MS", "250")),
+        }
+
+    if use_prompt:
+        kwargs["initial_prompt"] = _build_initial_prompt()
+
     try:
-        segments, _ = model.transcribe(
-            audio,
-            language=(cfg.language or None),
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": int(cfg.silence_sec * 1000)},
-        )
-        return " ".join((seg.text or "").strip() for seg in segments if seg.text and seg.text.strip())
+        segments, info = model.transcribe(audio, **kwargs)
+        text = " ".join((seg.text or "").strip() for seg in segments if seg.text and seg.text.strip())
+        text = " ".join(text.split())
+
+        if _env_bool("AKO_STT_DEBUG_TRANSCRIBE", False):
+            lang = getattr(info, "language", "")
+            prob = getattr(info, "language_probability", 0.0)
+            print(f"[VOICE] stt model={cfg.model} beam={beam_size} vad={use_vad} lang={lang} prob={prob:.2f} text={text}")
+
+        return text
     except Exception as e:
         raise RuntimeError(f"STT 변환 실패: {e}")
+
 
 
 # -----------------------------------------------------------------------------
@@ -346,6 +508,10 @@ def voice_actions_loop(cfg: VoiceConfig):
         if not text:
             continue
 
+        text = _apply_stt_correction(text)
+        if not text:
+            continue
+
         try:
             result = run_actions(text)
             print(f"[VOICE] 결과: {result}")
@@ -401,6 +567,10 @@ def gui_voice_loop(
             continue
 
         text = _strip_wakeword(text, cfg.wake_word)
+        if not text:
+            continue
+
+        text = _apply_stt_correction(text)
         if not text:
             continue
 
