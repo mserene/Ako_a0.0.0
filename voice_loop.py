@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import time
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 LogFn = Callable[[str], None]
@@ -23,9 +23,9 @@ class VoiceConfig:
     max_record_sec: float = 10.0
     silence_sec: float = 0.9
     silence_threshold: float = 0.012
-    model: str = "small"
+    model: str = field(default_factory=lambda: os.getenv("AKO_WHISPER_MODEL", "base"))
     language: str = "ko"
-    wake_word: str = ""
+    wake_word: str = field(default_factory=lambda: os.getenv("AKO_WAKE_WORD", ""))
     print_heard_audio_stats: bool = False
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from loading_overlay import LoadingOverlay
 from core.controller import AkoController
+from voice_loop import VoiceConfig
 
 
 def resource_path(rel_path: str) -> str:
@@ -259,6 +260,7 @@ class AkoGUI(tk.Tk):
         self.geometry("940x740")
         self.minsize(860, 680)
         self.configure(bg="#090b14")
+        self._ui_thread_id = threading.get_ident()
 
         self.colors = {
             "bg": "#090b14",
@@ -372,6 +374,36 @@ class AkoGUI(tk.Tk):
             highlightthickness=0,
         )
         self.power_btn.pack(side="left", padx=(0, 10))
+
+        self.mic_btn = tk.Button(
+            right,
+            text="마이크 켜기",
+            command=self._toggle_mic,
+            bg="#1b1f34",
+            fg="#f3f4ff",
+            activebackground="#2a3050",
+            activeforeground="#f3f4ff",
+            disabledforeground="#5f657e",
+            relief="flat",
+            bd=0,
+            padx=16,
+            pady=9,
+            font=self.fonts["button"],
+            cursor="hand2",
+            highlightthickness=0,
+        )
+        self.mic_btn.pack(side="left", padx=(0, 10))
+
+        self.mic_chip = tk.Label(
+            right,
+            text="마이크 꺼짐",
+            bg=self.colors["chip_off_bg"],
+            fg=self.colors["chip_off_fg"],
+            font=self.fonts["button"],
+            padx=16,
+            pady=8,
+        )
+        self.mic_chip.pack(side="left", padx=(0, 10))
 
         self.power_chip = tk.Label(
             right,
@@ -562,6 +594,10 @@ class AkoGUI(tk.Tk):
 
     def _append_log(self, line: str):
         """컨트롤러 로그를 DM 스타일 메시지로 변환."""
+        if threading.get_ident() != self._ui_thread_id:
+            self.after(0, self._append_log, line)
+            return
+
         raw = (line or "").strip()
         if not raw:
             return
@@ -578,6 +614,9 @@ class AkoGUI(tk.Tk):
             self._add_message("assistant", content.replace("[아코]", "", 1).strip())
         else:
             self._add_message("system", content)
+
+        if "음성 인식 ON" in content or "음성 인식 OFF" in content or "음성 인식 시작 실패" in content:
+            self._refresh_ui()
 
     def _clear_log(self):
         for child in self.chat_frame.winfo_children():
@@ -611,6 +650,56 @@ class AkoGUI(tk.Tk):
 
     def _toggle_power(self):
         self.controller.toggle_power()
+        self._refresh_ui()
+
+    def _make_voice_config(self) -> VoiceConfig:
+        return VoiceConfig(
+            device=None,
+            samplerate=16000,
+            model=os.getenv("AKO_WHISPER_MODEL", "base"),
+            language="ko",
+            wake_word=os.getenv("AKO_WAKE_WORD", ""),
+        )
+
+    def _toggle_mic(self):
+        if not self.controller.powered_on:
+            self.status_line.configure(text="전원을 먼저 켜주세요")
+            return
+
+        if self.controller.voice_on:
+            self.controller.stop_voice()
+            self.status_line.configure(text="마이크 꺼짐")
+            self._refresh_ui()
+            return
+
+        self.status_line.configure(text="마이크 준비 중...")
+        self.mic_btn.configure(state="disabled", cursor="arrow")
+        self.controller.start_voice(
+            cfg=self._make_voice_config(),
+            on_text=self._on_voice_text_from_thread,
+            on_error=self._on_voice_error_from_thread,
+        )
+        self._refresh_ui()
+
+    def _on_voice_text_from_thread(self, text: str):
+        self.after(0, self._handle_voice_text, text)
+
+    def _handle_voice_text(self, text: str):
+        text = (text or "").strip()
+        if not text or not self.controller.powered_on:
+            return
+
+        self._add_message("user", text)
+        self.status_line.configure(text="음성 입력 처리 중...")
+        self._handle_message(text)
+
+    def _on_voice_error_from_thread(self, error: str):
+        self.after(0, self._handle_voice_error, error)
+
+    def _handle_voice_error(self, error: str):
+        msg = (error or "알 수 없는 마이크 오류").strip()
+        self._add_message("system", f"마이크 오류: {msg}")
+        self.status_line.configure(text=f"마이크 오류: {msg}")
         self._refresh_ui()
 
     def _send_message(self):
@@ -725,12 +814,24 @@ class AkoGUI(tk.Tk):
 
     def _refresh_ui(self):
         on = self.controller.powered_on
+        mic_on = self.controller.voice_on
+        mic_starting = bool(getattr(self.controller, "_voice_starting", False))
 
         self.power_btn.configure(text="전원 끄기" if on else "전원 켜기")
+        self.mic_btn.configure(
+            text="마이크 끄기" if mic_on else "마이크 켜기",
+            state=("normal" if on and not mic_starting else "disabled"),
+            cursor=("hand2" if on and not mic_starting else "arrow"),
+        )
 
         if not on:
             self.power_chip.configure(
                 text="꺼짐",
+                bg=self.colors["chip_off_bg"],
+                fg=self.colors["chip_off_fg"],
+            )
+            self.mic_chip.configure(
+                text="마이크 꺼짐",
                 bg=self.colors["chip_off_bg"],
                 fg=self.colors["chip_off_fg"],
             )
@@ -743,6 +844,24 @@ class AkoGUI(tk.Tk):
                 bg=self.colors["chip_on_bg"],
                 fg=self.colors["chip_on_fg"],
             )
+            if mic_on:
+                self.mic_chip.configure(
+                    text="마이크 켜짐",
+                    bg=self.colors["chip_on_bg"],
+                    fg=self.colors["chip_on_fg"],
+                )
+            elif mic_starting:
+                self.mic_chip.configure(
+                    text="마이크 준비 중",
+                    bg=self.colors["accent_soft"],
+                    fg=self.colors["accent"],
+                )
+            else:
+                self.mic_chip.configure(
+                    text="마이크 꺼짐",
+                    bg=self.colors["chip_off_bg"],
+                    fg=self.colors["chip_off_fg"],
+                )
             self.msg_entry.configure(state="normal")
             self.send_btn.configure_state(True)
 
@@ -756,6 +875,7 @@ class AkoGUI(tk.Tk):
 
     def _on_close(self):
         try:
+            self.controller.stop_voice()
             self.controller.power_off()
         except Exception:
             pass

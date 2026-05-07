@@ -22,6 +22,8 @@ from voice_loop import (
 )
 
 LogFn = Callable[[str], None]
+VoiceTextFn = Callable[[str], None]
+VoiceErrorFn = Callable[[str], None]
 
 
 def _run_actions(text: str) -> str:
@@ -65,6 +67,8 @@ class AkoController:
 
     _voice_thread: Optional[threading.Thread] = field(default=None, init=False, repr=False)
     _voice_stop: Optional[threading.Event] = field(default=None, init=False, repr=False)
+    _voice_starting: bool = field(default=False, init=False, repr=False)
+    _voice_start_token: int = field(default=0, init=False, repr=False)
     _chat_history: ConversationHistory = field(
         default_factory=lambda: ConversationHistory(max_turns=8),
         init=False,
@@ -878,25 +882,46 @@ class AkoController:
             return
         on = bool(on)
         if on:
-            self.start_voice(cfg or VoiceConfig())
+            self.start_voice(cfg=cfg or VoiceConfig())
         else:
             self.stop_voice()
 
-    def start_voice(self, cfg: VoiceConfig) -> None:
+    def start_voice(
+        self,
+        cfg: Optional[VoiceConfig] = None,
+        on_text: Optional[VoiceTextFn] = None,
+        on_error: Optional[VoiceErrorFn] = None,
+    ) -> None:
         if not self.powered_on:
             self.log("전원이 OFF라서 음성 인식을 시작할 수 없어요.")
             return
+        cfg = cfg or VoiceConfig()
         if self.voice_on and self._voice_thread and self._voice_thread.is_alive():
+            return
+        if self._voice_starting:
             return
 
         self.log(f"음성 인식 준비 중... (model={cfg.model})")
+        self._voice_starting = True
+        self._voice_start_token += 1
+        start_token = self._voice_start_token
         self.voice_on = False
 
         def _after_model_ready(model_path: Optional[str]):
+            if start_token != self._voice_start_token:
+                return
+            self._voice_starting = False
             if not self.powered_on:
                 return
             if model_path is None:
-                self.log("음성 인식 시작 실패: 모델을 준비하지 못했어요. (텍스트 명령창은 사용 가능)")
+                msg = "음성 인식 시작 실패: 모델을 준비하지 못했어요. (텍스트 명령창은 사용 가능)"
+                if on_error:
+                    try:
+                        on_error(msg)
+                    except Exception:
+                        logging.exception("voice error callback failed")
+                else:
+                    self.log(msg)
                 self.voice_on = False
                 return
 
@@ -906,6 +931,14 @@ class AkoController:
             self.log("음성 인식 ON (듣는 중...)")
 
             def _on_heard(text: str):
+                if on_text:
+                    try:
+                        on_text(text)
+                    except Exception as e:
+                        logging.exception("voice text callback failed")
+                        self.log(f"(음성) 콜백 오류: {e}")
+                    return
+
                 self.log(f"[나] {text}")
                 try:
                     result = _run_actions(text)
@@ -916,11 +949,28 @@ class AkoController:
                 self.log(f"[Ako] {result}")
 
             def _on_error(err: str):
-                self.log(f"(음성) {err}")
+                if on_error:
+                    try:
+                        on_error(err)
+                    except Exception:
+                        logging.exception("voice error callback failed")
+                else:
+                    self.log(f"(음성) {err}")
+
+            voice_stop = self._voice_stop
+
+            def _run_voice_loop():
+                try:
+                    gui_voice_loop(cfg, voice_stop, _on_heard, _on_error)
+                finally:
+                    if self._voice_stop is voice_stop and not voice_stop.is_set():
+                        self.voice_on = False
+                        self._voice_thread = None
+                        self._voice_stop = None
+                        self.log("음성 인식 OFF")
 
             t = threading.Thread(
-                target=gui_voice_loop,
-                args=(cfg, self._voice_stop, _on_heard, _on_error),
+                target=_run_voice_loop,
                 daemon=True,
                 name="AkoVoiceLoop",
             )
@@ -936,6 +986,8 @@ class AkoController:
         )
 
     def stop_voice(self) -> None:
+        self._voice_start_token += 1
+        self._voice_starting = False
         if self._voice_stop is not None:
             self._voice_stop.set()
         if self._voice_thread and self._voice_thread.is_alive():
