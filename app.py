@@ -127,7 +127,7 @@ def run_do(press: str = "", direction: str = "", timeout_sec: float = 8.0, tap: 
 
 def main():
     p = argparse.ArgumentParser(prog="ako_ai")
-    p.add_argument("--mode", choices=["gui", "actions", "ui", "do", "voice"], default="gui")
+    p.add_argument("--mode", choices=["gui", "actions", "ui", "do", "voice", "voice-test"], default="gui")
     p.add_argument("--text", default="", help="actions 모드에서 사용할 텍스트 명령")
     p.add_argument("--press", default="", help="do 모드: 클릭할 텍스트 (예: 닫기/취소/확인)")
     p.add_argument("--tap", default="", help="do 모드: 탭/토글 액션 (예: youtube_toggle)")
@@ -145,6 +145,28 @@ def main():
     p.add_argument("--max-record", type=float, default=None, help="voice 모드: 한 번의 녹음 최대 길이(초)")
 
     args = p.parse_args()
+
+    def _make_voice_config():
+        from voice_loop import VoiceConfig
+
+        threshold_kwargs = {}
+        end_threshold = args.end_thresh if args.end_thresh is not None else args.thresh
+        if args.start_thresh is not None:
+            threshold_kwargs["speech_start_threshold"] = float(args.start_thresh)
+        if end_threshold is not None:
+            threshold_kwargs["speech_end_threshold"] = float(end_threshold)
+            threshold_kwargs["silence_threshold"] = float(end_threshold)
+        if args.max_record is not None:
+            threshold_kwargs["max_record_sec"] = float(args.max_record)
+        return VoiceConfig(
+            device=(None if args.device == -1 else args.device),
+            samplerate=int(args.sr),
+            model=str(args.model),
+            language=str(args.lang),
+            wake_word=str(args.wake),
+            silence_sec=float(args.silence),
+            **threshold_kwargs,
+        )
 
     if args.mode == "gui":
         try:
@@ -176,29 +198,25 @@ def main():
 
     elif args.mode == "voice":
         try:
-            from voice_loop import VoiceConfig, voice_actions_loop
-            threshold_kwargs = {}
-            end_threshold = args.end_thresh if args.end_thresh is not None else args.thresh
-            if args.start_thresh is not None:
-                threshold_kwargs["speech_start_threshold"] = float(args.start_thresh)
-            if end_threshold is not None:
-                threshold_kwargs["speech_end_threshold"] = float(end_threshold)
-                threshold_kwargs["silence_threshold"] = float(end_threshold)
-            if args.max_record is not None:
-                threshold_kwargs["max_record_sec"] = float(args.max_record)
-            cfg = VoiceConfig(
-                device=(None if args.device == -1 else args.device),
-                samplerate=int(args.sr),
-                model=str(args.model),
-                language=str(args.lang),
-                wake_word=str(args.wake),
-                silence_sec=float(args.silence),
-                **threshold_kwargs,
-            )
-            voice_actions_loop(cfg)
+            from voice_loop import voice_actions_loop
+            voice_actions_loop(_make_voice_config())
         except Exception as e:
             logging.exception("VOICE launch failed")
             print(f"[VOICE] 실행 오류: {e}")
+
+    elif args.mode == "voice-test":
+        try:
+            from voice_loop import listen_once
+            cfg = _make_voice_config()
+            print("[VOICE TEST] STT만 출력합니다. LLM/controller로 전달하지 않습니다. (Ctrl+C 종료)")
+            while True:
+                text = listen_once(cfg)
+                print(f"[VOICE TEST] {text}")
+        except KeyboardInterrupt:
+            print("\n[VOICE TEST] 종료")
+        except Exception as e:
+            logging.exception("VOICE TEST launch failed")
+            print(f"[VOICE TEST] 실행 오류: {e}")
 
 
 if __name__ == "__main__":

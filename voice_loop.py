@@ -50,10 +50,11 @@ class VoiceConfig:
     silence_threshold: float = 0.010
     speech_start_threshold: float = field(default_factory=lambda: _env_float("AKO_STT_SPEECH_START_THRESHOLD", 0.020, minimum=0.0))
     speech_end_threshold: float = field(default_factory=lambda: _env_float("AKO_STT_SPEECH_END_THRESHOLD", 0.009, minimum=0.0))
-    candidate_sec: float = field(default_factory=lambda: _env_float("AKO_STT_CANDIDATE_SEC", 0.15, minimum=0.0))
+    candidate_sec: float = field(default_factory=lambda: _env_float("AKO_STT_CANDIDATE_SEC", 0.30, minimum=0.0))
     min_speech_sec: float = field(default_factory=lambda: _env_float("AKO_STT_MIN_SPEECH_SEC", 0.40, minimum=0.0))
     pre_roll_sec: float = field(default_factory=lambda: _env_float("AKO_STT_PRE_ROLL_SEC", 0.30, minimum=0.0))
     rms_smoothing: float = field(default_factory=lambda: _env_float("AKO_STT_RMS_SMOOTHING", 0.8, minimum=0.0, maximum=0.98))
+    rms_release_smoothing: float = field(default_factory=lambda: _env_float("AKO_STT_RMS_RELEASE_SMOOTHING", 0.4, minimum=0.0, maximum=0.98))
     debug_audio: bool = field(default_factory=lambda: _env_bool("AKO_STT_DEBUG_AUDIO", False))
     model: str = field(default_factory=lambda: os.getenv("AKO_WHISPER_MODEL", "small"))
     language: str = "ko"
@@ -245,7 +246,8 @@ def _record_until_silence(cfg: VoiceConfig):
     silence_sec = max(0.0, float(cfg.silence_sec))
     min_speech_sec = max(0.0, float(cfg.min_speech_sec))
     max_record_sec = max(0.5, float(cfg.max_record_sec))
-    smoothing = min(0.98, max(0.0, float(cfg.rms_smoothing)))
+    attack_smoothing = min(0.98, max(0.0, float(cfg.rms_smoothing)))
+    release_smoothing = min(0.98, max(0.0, float(cfg.rms_release_smoothing)))
     debug_audio = bool(cfg.debug_audio or cfg.print_heard_audio_stats)
 
     waiting = "WAITING"
@@ -275,7 +277,9 @@ def _record_until_silence(cfg: VoiceConfig):
             f"candidate_sec={candidate_sec:.2f} "
             f"silence_sec={silence_sec:.2f} "
             f"min_speech_sec={min_speech_sec:.2f} "
-            f"max_record_sec={max_record_sec:.2f}"
+            f"max_record_sec={max_record_sec:.2f} "
+            f"attack_smoothing={attack_smoothing:.2f} "
+            f"release_smoothing={release_smoothing:.2f}"
         )
 
     def _cb(indata, _frames, _time, status):
@@ -293,11 +297,13 @@ def _record_until_silence(cfg: VoiceConfig):
         rms = _rms(mono)
         if smooth_rms is None:
             smooth_rms = rms
+        elif rms > smooth_rms:
+            smooth_rms = (smooth_rms * attack_smoothing) + (rms * (1.0 - attack_smoothing))
         else:
-            smooth_rms = (smooth_rms * smoothing) + (rms * (1.0 - smoothing))
+            smooth_rms = (smooth_rms * release_smoothing) + (rms * (1.0 - release_smoothing))
 
         if state == waiting:
-            if smooth_rms >= speech_start_threshold:
+            if rms >= speech_start_threshold:
                 state = candidate
                 candidate_frames.clear()
                 candidate_frames.append(mono)
@@ -309,10 +315,10 @@ def _record_until_silence(cfg: VoiceConfig):
 
         elif state == candidate:
             candidate_frames.append(mono)
-            if smooth_rms >= speech_start_threshold:
+            if rms >= speech_start_threshold:
                 candidate_elapsed += chunk_sec
                 active_elapsed += chunk_sec
-            elif smooth_rms < speech_end_threshold:
+            else:
                 state = waiting
                 candidate_frames.clear()
                 candidate_elapsed = 0.0
@@ -354,6 +360,7 @@ def _record_until_silence(cfg: VoiceConfig):
                 f"rms={rms:.5f} "
                 f"smooth={smooth_rms:.5f} "
                 f"started={state == recording} "
+                f"raw_start={rms >= speech_start_threshold} "
                 f"candidate={candidate_elapsed:.2f} "
                 f"active={active_elapsed:.2f} "
                 f"silence={silence_elapsed:.2f} "
@@ -474,12 +481,13 @@ def _prepare_audio_for_stt(audio):
     x = x - float(np.mean(x))
 
     rms = float((np.mean(x * x) + 1e-12) ** 0.5)
-    target_rms = float(os.getenv("AKO_WHISPER_TARGET_RMS", "0.06"))
-    max_gain = float(os.getenv("AKO_WHISPER_MAX_GAIN", "8.0"))
+    target_rms = float(os.getenv("AKO_WHISPER_TARGET_RMS", "0.08"))
+    max_gain = float(os.getenv("AKO_WHISPER_MAX_GAIN", "6.0"))
 
-    # 너무 작은 음성만 적당히 키운다. 이미 큰 음성은 건드리지 않는다.
+    # 너무 작은 음성만 제한적으로 키운다. 이미 큰 음성은 건드리지 않는다.
+    gain = 1.0
     if rms > 0 and rms < target_rms:
-        gain = min(max_gain, target_rms / rms)
+        gain = min(max_gain, target_rms / max(rms, 1e-6))
         x = x * gain
 
     peak = float(np.max(np.abs(x))) if x.size else 0.0
@@ -489,7 +497,7 @@ def _prepare_audio_for_stt(audio):
     if _env_bool("AKO_STT_DEBUG_AUDIO", False):
         new_rms = float((np.mean(x * x) + 1e-12) ** 0.5)
         new_peak = float(np.max(np.abs(x))) if x.size else 0.0
-        print(f"[VOICE] audio rms={rms:.4f}->{new_rms:.4f} peak={peak:.4f}->{new_peak:.4f}")
+        print(f"[VOICE] audio rms={rms:.4f}->{new_rms:.4f} peak={peak:.4f}->{new_peak:.4f} gain={gain:.2f}")
 
     return x.astype(np.float32)
 
@@ -540,6 +548,9 @@ def _transcribe(audio, cfg: VoiceConfig) -> str:
         segments, info = model.transcribe(audio, **kwargs)
         text = " ".join((seg.text or "").strip() for seg in segments if seg.text and seg.text.strip())
         text = " ".join(text.split())
+
+        if _env_bool("AKO_STT_PRINT_RAW", True):
+            print(f"[STT RAW] {text}")
 
         if _env_bool("AKO_STT_DEBUG_TRANSCRIBE", False):
             lang = getattr(info, "language", "")
