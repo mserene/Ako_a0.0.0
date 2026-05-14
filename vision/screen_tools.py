@@ -21,10 +21,11 @@ class ScreenTextHit:
     w: int
     h: int
     conf: float
+    variant: str = "raw"
 
     @classmethod
     def from_box(cls, box: Box) -> "ScreenTextHit":
-        return cls(box.text, box.x, box.y, box.w, box.h, box.conf)
+        return cls(box.text, box.x, box.y, box.w, box.h, box.conf, getattr(box, "variant", "raw"))
 
 
 def save_screenshot(monitor_index: int = 1, output_dir: Optional[str] = None) -> str:
