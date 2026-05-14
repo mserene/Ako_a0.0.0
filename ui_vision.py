@@ -4,7 +4,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import mss
 import numpy as np
@@ -52,7 +52,35 @@ def grab_screen(monitor_index: int = 1) -> np.ndarray:
     _set_dpi_awareness()
     with mss.mss() as sct:
         mon = sct.monitors[monitor_index]
+        if _env_bool("AKO_OCR_DEBUG", False):
+            print(f"[OCR DEBUG] capture monitor={monitor_index} bounds={mon}")
         return np.array(sct.grab(mon))
+
+
+def monitor_bounds(monitor_index: int = 1) -> Tuple[int, int, int, int]:
+    _set_dpi_awareness()
+    with mss.mss() as sct:
+        mon = sct.monitors[monitor_index]
+        return int(mon["left"]), int(mon["top"]), int(mon["width"]), int(mon["height"])
+
+
+def all_monitor_bounds() -> List[Tuple[int, int, int, int, int]]:
+    _set_dpi_awareness()
+    with mss.mss() as sct:
+        return [
+            (index, int(mon["left"]), int(mon["top"]), int(mon["width"]), int(mon["height"]))
+            for index, mon in enumerate(sct.monitors)
+        ]
+
+
+def grab_screen_with_origin(monitor_index: int = 1) -> tuple[np.ndarray, int, int, int, int]:
+    _set_dpi_awareness()
+    with mss.mss() as sct:
+        mon = sct.monitors[monitor_index]
+        if _env_bool("AKO_OCR_DEBUG", False):
+            print(f"[OCR DEBUG] capture monitor={monitor_index} bounds={mon}")
+        bgra = np.array(sct.grab(mon))
+        return bgra, int(mon["left"]), int(mon["top"]), int(mon["width"]), int(mon["height"])
 
 
 def _resolve_tesseract() -> None:
@@ -76,7 +104,7 @@ def _ocr_config(psm: int = 6) -> str:
 
 
 def _ocr_psms() -> List[int]:
-    raw = os.getenv("AKO_OCR_PSMS", "6,11")
+    raw = os.getenv("AKO_OCR_PSMS", "6")
     out: List[int] = []
     for item in raw.split(","):
         item = item.strip()
@@ -94,9 +122,11 @@ def _bgra_to_rgb_image(bgra: np.ndarray) -> Image.Image:
     return Image.fromarray(rgb)
 
 
-def _preprocess_image_for_ocr(img: Image.Image) -> tuple[Image.Image, float]:
-    scale = _env_float("AKO_OCR_UPSCALE", 2.0, minimum=1.0, maximum=4.0)
+def _preprocess_image_for_ocr(img: Image.Image, invert: bool = False, scale_override: float | None = None) -> tuple[Image.Image, float]:
+    scale = scale_override if scale_override is not None else _env_float("AKO_OCR_UPSCALE", 2.0, minimum=1.0, maximum=4.0)
     out = img.convert("L")
+    if invert:
+        out = ImageOps.invert(out)
     if scale != 1.0:
         resampling = getattr(Image, "Resampling", Image)
         out = out.resize((int(out.width * scale), int(out.height * scale)), resampling.LANCZOS)
@@ -118,16 +148,28 @@ def _debug_dir() -> str:
     return path
 
 
-def _save_ocr_debug_images(raw_img: Image.Image, pre_img: Image.Image) -> None:
+def _save_ocr_debug_images(raw_img: Image.Image, pre_img: Image.Image, debug_tag: str | None = None) -> None:
     if not _env_bool("AKO_OCR_SAVE_DEBUG_IMAGES", True):
         return
     folder = _debug_dir()
-    raw_path = os.path.abspath(os.path.join(folder, "debug_ocr_input_raw.png"))
-    pre_path = os.path.abspath(os.path.join(folder, "debug_ocr_input_preprocessed.png"))
+    suffix = ""
+    if debug_tag:
+        suffix = "_" + re.sub(r"[^0-9A-Za-z가-힣_.-]+", "_", debug_tag.strip())[:60]
+    raw_path = os.path.abspath(os.path.join(folder, f"debug_ocr_input{suffix}_raw.png"))
+    pre_path = os.path.abspath(os.path.join(folder, f"debug_ocr_input{suffix}_preprocessed.png"))
     raw_img.save(raw_path)
     pre_img.save(pre_path)
     print(f"[OCR DEBUG] raw image: {raw_path} size={raw_img.size}")
     print(f"[OCR DEBUG] preprocessed image: {pre_path} size={pre_img.size}")
+
+
+def _save_ocr_debug_extra(name: str, img: Image.Image) -> None:
+    if not _env_bool("AKO_OCR_SAVE_DEBUG_IMAGES", True):
+        return
+    safe = re.sub(r"[^0-9A-Za-z가-힣_.-]+", "_", name)[:80]
+    path = os.path.abspath(os.path.join(_debug_dir(), f"debug_ocr_{safe}.png"))
+    img.save(path)
+    print(f"[OCR DEBUG] variant image: {path} size={img.size}")
 
 
 def _parse_conf(raw: object) -> float:
@@ -150,6 +192,8 @@ def _image_to_boxes(
     variant: str,
     scale: float = 1.0,
     psm: int = 6,
+    offset_x: int = 0,
+    offset_y: int = 0,
 ) -> List[Box]:
     data = pytesseract.image_to_data(
         img,
@@ -164,12 +208,150 @@ def _image_to_boxes(
         if not raw_text:
             continue
         confidence = _parse_conf(data.get("conf", ["-1"] * count)[index])
-        left = int(float(data["left"][index]) / scale)
-        top = int(float(data["top"][index]) / scale)
+        left = offset_x + int(float(data["left"][index]) / scale)
+        top = offset_y + int(float(data["top"][index]) / scale)
         width = max(1, int(float(data["width"][index]) / scale))
         height = max(1, int(float(data["height"][index]) / scale))
         boxes.append(Box(raw_text, left, top, width, height, confidence, variant=variant))
     return boxes
+
+
+def _dedupe_boxes(boxes: List["Box"]) -> List["Box"]:
+    out: List[Box] = []
+    seen: set[tuple[int, int, int, int, str, str]] = set()
+    for box in boxes:
+        key = (box.x, box.y, box.w, box.h, _norm(box.text), box.variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(box)
+    return out
+
+
+def _merged_line_boxes(boxes: List["Box"]) -> List["Box"]:
+    """Tesseract가 한국어를 글자별로 쪼갠 경우 인접 박스를 이어 붙인다."""
+    tokens = [box for box in boxes if _norm(box.text)]
+    if not tokens:
+        return []
+    tokens.sort(key=lambda box: (box.y, box.x))
+
+    lines: List[List[Box]] = []
+    for box in tokens:
+        placed = False
+        for line in lines:
+            line_cy = sum(item.cy for item in line) / len(line)
+            max_h = max(max(item.h for item in line), box.h)
+            if abs(box.cy - line_cy) <= max(8.0, max_h * 0.75):
+                line.append(box)
+                placed = True
+                break
+        if not placed:
+            lines.append([box])
+
+    merged: List[Box] = []
+    max_tokens = int(_env_float("AKO_OCR_MERGE_MAX_TOKENS", 8, minimum=2, maximum=20))
+    for line in lines:
+        line.sort(key=lambda box: box.x)
+        parts: List[List[Box]] = []
+        current: List[Box] = []
+        for box in line:
+            if not current:
+                current = [box]
+                continue
+            prev = current[-1]
+            gap = box.x - (prev.x + prev.w)
+            max_h = max(prev.h, box.h)
+            if gap <= max(35, max_h * 2.5):
+                current.append(box)
+            else:
+                parts.append(current)
+                current = [box]
+        if current:
+            parts.append(current)
+
+        for part in parts:
+            n = len(part)
+            for start in range(n):
+                end_limit = min(n, start + max_tokens)
+                for end in range(start + 2, end_limit + 1):
+                    chunk = part[start:end]
+                    text = "".join(item.text for item in chunk)
+                    norm = _norm(text)
+                    if len(norm) < 2:
+                        continue
+                    x1 = min(item.x for item in chunk)
+                    y1 = min(item.y for item in chunk)
+                    x2 = max(item.x + item.w for item in chunk)
+                    y2 = max(item.y + item.h for item in chunk)
+                    confs = [item.conf for item in chunk if item.conf >= 0]
+                    conf = sum(confs) / len(confs) if confs else -1.0
+                    merged.append(Box(text, x1, y1, x2 - x1, y2 - y1, conf, variant=f"merged:{chunk[0].variant}"))
+    return _dedupe_boxes(merged)
+
+
+@dataclass(frozen=True)
+class _OcrVariant:
+    name: str
+    image: Image.Image
+    scale: float
+    offset_x: int = 0
+    offset_y: int = 0
+
+
+def _ocr_variants(raw_img: Image.Image) -> List[_OcrVariant]:
+    variants: List[_OcrVariant] = []
+    pre_img, scale = _preprocess_image_for_ocr(raw_img)
+
+    inv_img, inv_scale = _preprocess_image_for_ocr(raw_img, invert=True)
+    if _env_bool("AKO_OCR_FULL_PAGE", False):
+        variants.append(_OcrVariant("raw", raw_img, 1.0))
+        variants.append(_OcrVariant("preprocessed", pre_img, scale))
+        variants.append(_OcrVariant("inverted", inv_img, inv_scale))
+
+    if _env_bool("AKO_OCR_TILE", True):
+        w, h = raw_img.size
+        tile_scale = _env_float("AKO_OCR_TILE_UPSCALE", 3.0, minimum=1.0, maximum=5.0)
+        regions = [
+            ("top", 0, 0, w, int(h * 0.28)),
+            ("top_left", 0, 0, int(w * 0.45), int(h * 0.35)),
+            ("left", 0, 0, int(w * 0.35), h),
+            ("center", int(w * 0.15), int(h * 0.10), int(w * 0.70), int(h * 0.75)),
+            ("right", int(w * 0.62), 0, int(w * 0.38), h),
+            ("bottom", 0, int(h * 0.62), w, int(h * 0.38)),
+        ]
+        if _env_bool("AKO_OCR_GRID", False):
+            cols = int(_env_float("AKO_OCR_GRID_COLS", 3, minimum=1, maximum=6))
+            rows = int(_env_float("AKO_OCR_GRID_ROWS", 3, minimum=1, maximum=6))
+            overlap = _env_float("AKO_OCR_GRID_OVERLAP", 0.08, minimum=0.0, maximum=0.4)
+            cell_w = w / cols
+            cell_h = h / rows
+            for row in range(rows):
+                for col in range(cols):
+                    x = max(0, int((col - overlap) * cell_w))
+                    y = max(0, int((row - overlap) * cell_h))
+                    x2 = min(w, int((col + 1 + overlap) * cell_w))
+                    y2 = min(h, int((row + 1 + overlap) * cell_h))
+                    regions.append((f"grid_{row}_{col}", x, y, x2 - x, y2 - y))
+
+        seen_regions: set[tuple[int, int, int, int]] = set()
+        for name, x, y, tw, th in regions:
+            if tw <= 10 or th <= 10:
+                continue
+            key = (x, y, tw, th)
+            if key in seen_regions:
+                continue
+            seen_regions.add(key)
+            crop = raw_img.crop((x, y, min(w, x + tw), min(h, y + th)))
+            crop_pre, crop_scale = _preprocess_image_for_ocr(crop, scale_override=tile_scale)
+            crop_inv, crop_inv_scale = _preprocess_image_for_ocr(crop, invert=True, scale_override=tile_scale)
+            variants.append(_OcrVariant(f"tile_{name}", crop_pre, crop_scale, x, y))
+            variants.append(_OcrVariant(f"tile_{name}_inverted", crop_inv, crop_inv_scale, x, y))
+
+    if _env_bool("AKO_OCR_SAVE_DEBUG_VARIANTS", False):
+        for variant in variants:
+            if variant.name != "raw":
+                _save_ocr_debug_extra(variant.name, variant.image)
+    return variants
 
 
 def _print_ocr_debug(target: str, lang: str, raw_boxes: List["Box"], pre_boxes: List["Box"]) -> None:
@@ -182,16 +364,22 @@ def _print_ocr_debug(target: str, lang: str, raw_boxes: List["Box"], pre_boxes: 
     except Exception as e:
         print(f"[OCR DEBUG] available_langs_error={type(e).__name__}: {e}")
 
+    limit = int(_env_float("AKO_OCR_DEBUG_LIMIT", 0, minimum=0, maximum=100000))
+
     def emit(label: str, boxes: List[Box]) -> None:
         print(f"[OCR RAW] {label} count={len(boxes)}")
-        for box in boxes:
+        shown = boxes if limit <= 0 else boxes[:limit]
+        for box in shown:
             print(
                 "[OCR RAW] "
                 f"{label} "
+                f"variant={box.variant} "
                 f"text={_console_safe(repr(box.text))} "
                 f"conf={box.conf:.1f} "
                 f"x={box.x} y={box.y} w={box.w} h={box.h}"
             )
+        if limit > 0 and len(boxes) > limit:
+            print(f"[OCR RAW] {label} truncated={len(boxes) - limit}")
 
     emit("raw", raw_boxes)
     emit("preprocessed", pre_boxes)
@@ -238,10 +426,43 @@ def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
+def _match_sort_key(box: "Box", target: str) -> tuple[int, int, float, int]:
+    box_n = _norm(box.text)
+    target_n = _norm(target)
+    if box_n == target_n:
+        kind = 0
+    elif target_n and target_n in box_n:
+        kind = 1
+    elif box_n and box_n in target_n:
+        kind = 2
+    else:
+        kind = 3
+    return (kind, abs(len(box_n) - len(target_n)), -box.conf, box.w * box.h)
+
+
+def _overlap_fraction(a: "Box", b: "Box") -> float:
+    ax2 = a.x + a.w
+    ay2 = a.y + a.h
+    bx2 = b.x + b.w
+    by2 = b.y + b.h
+    ix1 = max(a.x, b.x)
+    iy1 = max(a.y, b.y)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    smaller = max(1, min(a.w * a.h, b.w * b.h))
+    return inter / smaller
+
+
 def _box_matches(box_text: str, target: str, allow_contains: bool) -> bool:
     box_n = _norm(box_text)
     target_n = _norm(target)
     if not box_n or not target_n:
+        return False
+    target_has_hangul = bool(re.search(r"[가-힣]", target_n))
+    if target_has_hangul and not re.search(r"[가-힣]", box_n):
         return False
     if box_n == target_n:
         return True
@@ -250,6 +471,8 @@ def _box_matches(box_text: str, target: str, allow_contains: bool) -> bool:
     if allow_contains and box_n in target_n and len(box_n) >= max(2, len(target_n) - 1):
         return True
     if not _env_bool("AKO_OCR_FUZZY", True):
+        return False
+    if target_has_hangul and len(target_n) <= 2:
         return False
     threshold = _env_float("AKO_OCR_FUZZY_THRESHOLD", 0.72, minimum=0.0, maximum=1.0)
     return _similarity(box_n, target_n) >= threshold
@@ -261,6 +484,7 @@ def find_text_boxes(
     lang: str = "kor+eng",
     conf_min: float = 50.0,
     allow_contains: bool = True,
+    debug_tag: str | None = None,
 ) -> List[Box]:
     """
     target 텍스트가 포함된 OCR 박스 리스트 반환 (좌표 포함).
@@ -274,19 +498,35 @@ def find_text_boxes(
         return []
 
     raw_img = _bgra_to_rgb_image(bgra)
-    pre_img, scale = _preprocess_image_for_ocr(raw_img)
-    _save_ocr_debug_images(raw_img, pre_img)
+    pre_img, _scale = _preprocess_image_for_ocr(raw_img)
+    _save_ocr_debug_images(raw_img, pre_img, debug_tag=debug_tag)
 
     raw_boxes: List[Box] = []
-    pre_boxes: List[Box] = []
-    for psm in _ocr_psms():
-        raw_boxes.extend(_image_to_boxes(raw_img, lang=lang, variant=f"raw_psm{psm}", scale=1.0, psm=psm))
-        pre_boxes.extend(_image_to_boxes(pre_img, lang=lang, variant=f"preprocessed_psm{psm}", scale=scale, psm=psm))
-    _print_ocr_debug(target, lang, raw_boxes, pre_boxes)
+    processed_boxes: List[Box] = []
+    for variant in _ocr_variants(raw_img):
+        for psm in _ocr_psms():
+            boxes_for_variant = _image_to_boxes(
+                variant.image,
+                lang=lang,
+                variant=f"{variant.name}_psm{psm}",
+                scale=variant.scale,
+                psm=psm,
+                offset_x=variant.offset_x,
+                offset_y=variant.offset_y,
+            )
+            if variant.name == "raw":
+                raw_boxes.extend(boxes_for_variant)
+            else:
+                processed_boxes.extend(boxes_for_variant)
+
+    raw_boxes = _dedupe_boxes(raw_boxes)
+    processed_boxes = _dedupe_boxes(processed_boxes)
+    merged_boxes = _merged_line_boxes(raw_boxes + processed_boxes)
+    _print_ocr_debug(target, lang, raw_boxes, processed_boxes + merged_boxes)
 
     boxes: List[Box] = []
     seen: set[tuple[int, int, int, int, str]] = set()
-    for box in raw_boxes + pre_boxes:
+    for box in raw_boxes + processed_boxes + merged_boxes:
         if box.conf < conf_min:
             continue
         if not _box_matches(box.text, target_n, allow_contains):
@@ -296,6 +536,14 @@ def find_text_boxes(
             continue
         seen.add(key)
         boxes.append(box)
+
+    boxes.sort(key=lambda box: _match_sort_key(box, target_n))
+    filtered_boxes: List[Box] = []
+    for box in boxes:
+        if any(_overlap_fraction(box, accepted) >= 0.6 for accepted in filtered_boxes):
+            continue
+        filtered_boxes.append(box)
+    boxes = filtered_boxes
 
     if _env_bool("AKO_OCR_DEBUG", True):
         print(f"[OCR MATCH] target={target!r} conf_min={conf_min:.1f} matches={len(boxes)}")

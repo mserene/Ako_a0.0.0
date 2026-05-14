@@ -19,10 +19,12 @@ _overlay_lock = threading.Lock()
 
 
 class HighlightOverlay:
-    def __init__(self, rects: Iterable[HighlightRect], monitor_width: int, monitor_height: int):
+    def __init__(self, rects: Iterable[HighlightRect], monitor_width: int, monitor_height: int, monitor_left: int = 0, monitor_top: int = 0):
         self.rects = list(rects)
         self.monitor_width = int(monitor_width)
         self.monitor_height = int(monitor_height)
+        self.monitor_left = int(monitor_left)
+        self.monitor_top = int(monitor_top)
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="AkoHighlightOverlay")
 
@@ -41,7 +43,7 @@ class HighlightOverlay:
             self.root.attributes("-transparentcolor", "white")
         except Exception:
             self.root.attributes("-alpha", 0.35)
-        self.root.geometry(f"{self.monitor_width}x{self.monitor_height}+0+0")
+        self.root.geometry(f"{self.monitor_width}x{self.monitor_height}{self.monitor_left:+d}{self.monitor_top:+d}")
 
         canvas = tk.Canvas(
             self.root,
@@ -54,10 +56,12 @@ class HighlightOverlay:
 
         for rect in self.rects:
             pad = 8
-            x1 = max(0, rect.x - pad)
-            y1 = max(0, rect.y - pad)
-            x2 = min(self.monitor_width, rect.x + rect.w + pad)
-            y2 = min(self.monitor_height, rect.y + rect.h + pad)
+            local_x = rect.x - self.monitor_left
+            local_y = rect.y - self.monitor_top
+            x1 = max(0, local_x - pad)
+            y1 = max(0, local_y - pad)
+            x2 = min(self.monitor_width, local_x + rect.w + pad)
+            y2 = min(self.monitor_height, local_y + rect.h + pad)
             canvas.create_rectangle(x1, y1, x2, y2, fill="#8a2be2", stipple="gray50", outline="#b56cff", width=3)
             if rect.label:
                 canvas.create_text(x1, max(12, y1 - 10), anchor="w", text=rect.label, fill="#b56cff", font=("Malgun Gothic", 14, "bold"))
@@ -77,10 +81,16 @@ class HighlightOverlay:
                 pass
 
 
-def show_highlights(rects: Iterable[HighlightRect], monitor_width: int, monitor_height: int) -> None:
+def show_highlights(
+    rects: Iterable[HighlightRect],
+    monitor_width: int,
+    monitor_height: int,
+    monitor_left: int = 0,
+    monitor_top: int = 0,
+) -> None:
     global _overlay
     clear_highlights()
-    overlay = HighlightOverlay(rects, monitor_width, monitor_height)
+    overlay = HighlightOverlay(rects, monitor_width, monitor_height, monitor_left=monitor_left, monitor_top=monitor_top)
     with _overlay_lock:
         _overlay = overlay
     overlay.show()

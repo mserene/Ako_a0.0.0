@@ -706,7 +706,7 @@ def handle_screen_capture(text: str) -> Optional[str]:
         return None
     try:
         from vision.screen_tools import save_screenshot
-        path = save_screenshot(monitor_index=1)
+        path = save_screenshot()
         return f"화면을 캡처했어요: {path}"
     except Exception as e:
         return f"화면 캡처 실패: {e}"
@@ -732,7 +732,7 @@ def handle_screen_highlight(text: str) -> Optional[str]:
 
     try:
         from vision.highlight_overlay import HighlightRect, show_highlights
-        from vision.screen_tools import extract_quoted_or_target, find_text_on_screen
+        from vision.screen_tools import extract_quoted_or_target, find_text_on_screen, get_screen_bounds
     except Exception as e:
         return f"화면 강조 모듈 로드 실패: {e}"
 
@@ -741,15 +741,13 @@ def handle_screen_highlight(text: str) -> Optional[str]:
         return None
 
     try:
-        hits = find_text_on_screen(target, monitor_index=1)
+        hits = find_text_on_screen(target)
         if not hits:
             return f"화면에서 '{target}'를 찾지 못했어요."
 
-        import pyautogui as pag
-
-        width, height = pag.size()
+        left, top, width, height = get_screen_bounds()
         rects = [HighlightRect(hit.x, hit.y, hit.w, hit.h, hit.text) for hit in hits[:12]]
-        show_highlights(rects, int(width), int(height))
+        show_highlights(rects, int(width), int(height), monitor_left=int(left), monitor_top=int(top))
         return f"화면에서 '{target}'를 {len(hits)}개 찾았어요. 보라색으로 강조했어요."
     except Exception as e:
         return f"화면 텍스트 검색 실패: {e}"
