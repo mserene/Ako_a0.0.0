@@ -138,8 +138,11 @@ def main():
     p.add_argument("--sr", type=int, default=16000, help="voice 모드: 샘플레이트")
     p.add_argument("--model", default="small", help="voice 모드: faster-whisper 모델명 (tiny/base/small/medium/large-v3)")
     p.add_argument("--lang", default="ko", help="voice 모드: 인식 언어(ko/en 등)")
-    p.add_argument("--silence", type=float, default=0.9, help="voice 모드: 무음 지속시간(초)")
-    p.add_argument("--thresh", type=float, default=0.012, help="voice 모드: 무음 판정 RMS 임계값")
+    p.add_argument("--silence", type=float, default=0.8, help="voice 모드: 종료 판정 무음 지속시간(초)")
+    p.add_argument("--start-thresh", type=float, default=None, help="voice 모드: 음성 시작 RMS 임계값")
+    p.add_argument("--end-thresh", type=float, default=None, help="voice 모드: 음성 종료 RMS 임계값")
+    p.add_argument("--thresh", type=float, default=None, help="voice 모드: 종료 RMS 임계값(이전 옵션, --end-thresh와 같음)")
+    p.add_argument("--max-record", type=float, default=None, help="voice 모드: 한 번의 녹음 최대 길이(초)")
 
     args = p.parse_args()
 
@@ -174,6 +177,15 @@ def main():
     elif args.mode == "voice":
         try:
             from voice_loop import VoiceConfig, voice_actions_loop
+            threshold_kwargs = {}
+            end_threshold = args.end_thresh if args.end_thresh is not None else args.thresh
+            if args.start_thresh is not None:
+                threshold_kwargs["speech_start_threshold"] = float(args.start_thresh)
+            if end_threshold is not None:
+                threshold_kwargs["speech_end_threshold"] = float(end_threshold)
+                threshold_kwargs["silence_threshold"] = float(end_threshold)
+            if args.max_record is not None:
+                threshold_kwargs["max_record_sec"] = float(args.max_record)
             cfg = VoiceConfig(
                 device=(None if args.device == -1 else args.device),
                 samplerate=int(args.sr),
@@ -181,7 +193,7 @@ def main():
                 language=str(args.lang),
                 wake_word=str(args.wake),
                 silence_sec=float(args.silence),
-                silence_threshold=float(args.thresh),
+                **threshold_kwargs,
             )
             voice_actions_loop(cfg)
         except Exception as e:

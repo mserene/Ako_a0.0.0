@@ -9,10 +9,35 @@ from __future__ import annotations
 import os
 import time
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 LogFn = Callable[[str], None]
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_float(
+    name: str,
+    default: float,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except Exception:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
 @dataclass
@@ -20,9 +45,16 @@ class VoiceConfig:
     device: Optional[int] = None
     samplerate: int = 16000
     min_record_sec: float = 0.45
-    max_record_sec: float = 10.0
-    silence_sec: float = 0.85
+    max_record_sec: float = field(default_factory=lambda: _env_float("AKO_STT_MAX_RECORD_SEC", 8.0, minimum=0.5))
+    silence_sec: float = field(default_factory=lambda: _env_float("AKO_STT_SILENCE_SEC", 0.80, minimum=0.1))
     silence_threshold: float = 0.010
+    speech_start_threshold: float = field(default_factory=lambda: _env_float("AKO_STT_SPEECH_START_THRESHOLD", 0.020, minimum=0.0))
+    speech_end_threshold: float = field(default_factory=lambda: _env_float("AKO_STT_SPEECH_END_THRESHOLD", 0.009, minimum=0.0))
+    candidate_sec: float = field(default_factory=lambda: _env_float("AKO_STT_CANDIDATE_SEC", 0.15, minimum=0.0))
+    min_speech_sec: float = field(default_factory=lambda: _env_float("AKO_STT_MIN_SPEECH_SEC", 0.40, minimum=0.0))
+    pre_roll_sec: float = field(default_factory=lambda: _env_float("AKO_STT_PRE_ROLL_SEC", 0.30, minimum=0.0))
+    rms_smoothing: float = field(default_factory=lambda: _env_float("AKO_STT_RMS_SMOOTHING", 0.8, minimum=0.0, maximum=0.98))
+    debug_audio: bool = field(default_factory=lambda: _env_bool("AKO_STT_DEBUG_AUDIO", False))
     model: str = field(default_factory=lambda: os.getenv("AKO_WHISPER_MODEL", "small"))
     language: str = "ko"
     wake_word: str = field(default_factory=lambda: os.getenv("AKO_WAKE_WORD", ""))
@@ -196,37 +228,139 @@ def _rms(x) -> float:
 
 
 def _record_until_silence(cfg: VoiceConfig):
-    """sounddevice로 녹음. 무음이 일정 시간 지속되면 종료."""
+    """sounddevice로 녹음. 음성 후보/녹음/무음 상태를 분리해 종료를 판정한다."""
     import numpy as np
     import sounddevice as sd
 
     sr = int(cfg.samplerate)
-    block = int(sr * 0.2)  # 200ms 단위로 처리
+    block_sec = _env_float("AKO_STT_BLOCK_SEC", 0.05, minimum=0.02, maximum=0.20)
+    block = max(1, int(sr * block_sec))
+
+    speech_end_threshold = cfg.speech_end_threshold
+    if speech_end_threshold is None or speech_end_threshold <= 0:
+        speech_end_threshold = cfg.silence_threshold
+    speech_end_threshold = max(0.0, float(speech_end_threshold))
+    speech_start_threshold = max(float(cfg.speech_start_threshold), speech_end_threshold)
+    candidate_sec = max(0.0, float(cfg.candidate_sec))
+    silence_sec = max(0.0, float(cfg.silence_sec))
+    min_speech_sec = max(0.0, float(cfg.min_speech_sec))
+    max_record_sec = max(0.5, float(cfg.max_record_sec))
+    smoothing = min(0.98, max(0.0, float(cfg.rms_smoothing)))
+    debug_audio = bool(cfg.debug_audio or cfg.print_heard_audio_stats)
+
+    waiting = "WAITING"
+    candidate = "SPEECH_CANDIDATE"
+    recording = "RECORDING"
 
     frames = []
-    started = False
-    silent_for = 0.0
-    total = 0.0
+    pre_roll = deque(maxlen=max(1, int(max(0.0, cfg.pre_roll_sec) / block_sec) + 1))
+    candidate_frames = []
+
+    state = waiting
+    smooth_rms: float | None = None
+    stream_elapsed = 0.0
+    candidate_elapsed = 0.0
+    active_elapsed = 0.0
+    recorded_elapsed = 0.0
+    silence_elapsed = 0.0
+    finished = False
+    finish_reason = ""
+    last_debug_at = -1.0
+
+    if debug_audio:
+        print(
+            "[AUDIO] vad "
+            f"start_threshold={speech_start_threshold:.5f} "
+            f"end_threshold={speech_end_threshold:.5f} "
+            f"candidate_sec={candidate_sec:.2f} "
+            f"silence_sec={silence_sec:.2f} "
+            f"min_speech_sec={min_speech_sec:.2f} "
+            f"max_record_sec={max_record_sec:.2f}"
+        )
 
     def _cb(indata, _frames, _time, status):
-        nonlocal started, silent_for, total
-        mono = indata[:, 0].copy()
-        frames.append(mono)
-        total += _frames / sr
+        nonlocal state, smooth_rms, stream_elapsed, candidate_elapsed
+        nonlocal active_elapsed, recorded_elapsed, silence_elapsed
+        nonlocal finished, finish_reason, last_debug_at
 
-        level = _rms(mono)
-        if cfg.print_heard_audio_stats:
-            print(f"[VOICE] rms={level:.4f} total={total:.1f}s")
-
-        if not started:
-            if total >= cfg.min_record_sec:
-                started = True
+        if finished:
             return
 
-        if level < cfg.silence_threshold:
-            silent_for += _frames / sr
+        mono = indata[:, 0].copy()
+        chunk_sec = _frames / sr
+        stream_elapsed += chunk_sec
+
+        rms = _rms(mono)
+        if smooth_rms is None:
+            smooth_rms = rms
         else:
-            silent_for = 0.0
+            smooth_rms = (smooth_rms * smoothing) + (rms * (1.0 - smoothing))
+
+        if state == waiting:
+            if smooth_rms >= speech_start_threshold:
+                state = candidate
+                candidate_frames.clear()
+                candidate_frames.append(mono)
+                candidate_elapsed = chunk_sec
+                active_elapsed = chunk_sec
+                silence_elapsed = 0.0
+            else:
+                pre_roll.append(mono)
+
+        elif state == candidate:
+            candidate_frames.append(mono)
+            if smooth_rms >= speech_start_threshold:
+                candidate_elapsed += chunk_sec
+                active_elapsed += chunk_sec
+            elif smooth_rms < speech_end_threshold:
+                state = waiting
+                candidate_frames.clear()
+                candidate_elapsed = 0.0
+                active_elapsed = 0.0
+                silence_elapsed = 0.0
+            if state == candidate and candidate_elapsed >= candidate_sec:
+                frames.extend(pre_roll)
+                frames.extend(candidate_frames)
+                pre_roll.clear()
+                candidate_frames.clear()
+                state = recording
+                recorded_elapsed = sum(len(frame) for frame in frames) / sr
+                silence_elapsed = 0.0
+
+        elif state == recording:
+            frames.append(mono)
+            recorded_elapsed += chunk_sec
+            if smooth_rms < speech_end_threshold:
+                silence_elapsed += chunk_sec
+            else:
+                silence_elapsed = 0.0
+                active_elapsed += chunk_sec
+
+            if silence_elapsed >= silence_sec:
+                finished = True
+                finish_reason = "silence"
+            elif recorded_elapsed >= max_record_sec:
+                finished = True
+                finish_reason = "max_record"
+
+        if state != recording and stream_elapsed >= max_record_sec:
+            finished = True
+            finish_reason = "no_speech"
+
+        if debug_audio and (last_debug_at < 0 or stream_elapsed - last_debug_at >= 0.20 or finished):
+            print(
+                "[AUDIO] "
+                f"state={state} "
+                f"rms={rms:.5f} "
+                f"smooth={smooth_rms:.5f} "
+                f"started={state == recording} "
+                f"candidate={candidate_elapsed:.2f} "
+                f"active={active_elapsed:.2f} "
+                f"silence={silence_elapsed:.2f} "
+                f"record={recorded_elapsed:.2f} "
+                f"reason={finish_reason}"
+            )
+            last_debug_at = stream_elapsed
 
     try:
         with sd.InputStream(
@@ -240,11 +374,10 @@ def _record_until_silence(cfg: VoiceConfig):
             t0 = time.time()
             while True:
                 time.sleep(0.05)
-                if total >= cfg.max_record_sec:
+                if finished:
                     break
-                if started and silent_for >= cfg.silence_sec:
-                    break
-                if time.time() - t0 > cfg.max_record_sec + 2.0:
+                if time.time() - t0 > max_record_sec + 2.0:
+                    finish_reason = finish_reason or "timeout"
                     break
     except Exception as e:
         raise RuntimeError(
@@ -257,19 +390,19 @@ def _record_until_silence(cfg: VoiceConfig):
         import numpy as np
         return np.zeros((0,), dtype=np.float32)
 
+    if active_elapsed < min_speech_sec:
+        if debug_audio:
+            print(
+                "[AUDIO] discard "
+                f"active={active_elapsed:.2f} "
+                f"min_speech={min_speech_sec:.2f} "
+                f"reason={finish_reason or 'short_speech'}"
+            )
+        import numpy as np
+        return np.zeros((0,), dtype=np.float32)
+
     import numpy as np
     return np.concatenate(frames, axis=0)
-
-
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        value = int(os.getenv(name, str(default)))
-        return max(1, value)
-    except ValueError:
-        return default
-
 
 def _build_stt_initial_prompt() -> str:
     """짧은 한국어 PC 명령에서 앱 이름이 뭉개지지 않게 Whisper에 힌트를 준다."""
@@ -307,14 +440,6 @@ def _apply_stt_correction(text: str) -> str:
         return corrected
     except Exception:
         return raw
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
-
 
 def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 999) -> int:
     try:
@@ -579,3 +704,4 @@ def gui_voice_loop(
         except Exception as e:
             _err(f"콜백 오류: {e}")
             time.sleep(0.2)
+
