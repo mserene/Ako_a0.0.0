@@ -634,9 +634,125 @@ def handle_search_command(
     return f"{name}에서 검색했어요."
 
 # -----------------------------------------------------------------------------
-# app.py에서 분리: UI 명령 파서 (app.py는 진입점만 담당하도록)
+# app.py에서 분리: 로컬 명령 파서 (app.py는 진입점만 담당하도록)
 # -----------------------------------------------------------------------------
 _DIR_PAT = r"(왼쪽\s*위|오른쪽\s*위|왼쪽\s*아래|오른쪽\s*아래|왼쪽|오른쪽|위|아래|좌상|우상|좌하|우하)"
+
+
+def handle_window_control(text: str, app_specs: Optional[Dict[str, AppSpec]] = None) -> Optional[str]:
+    """창 닫기/최소화 명령 처리."""
+    s = (text or "").strip()
+    if not s:
+        return None
+
+    try:
+        from automation.window_control import close_foreground_window, close_window_by_app, minimize_all_windows
+    except Exception as e:
+        return f"창 제어 모듈 로드 실패: {e}"
+
+    compact = re.sub(r"\s+", "", s)
+    if re.search(r"(창|윈도우).*(다|전부|모두).*(내려|최소화)", s) or re.search(r"(다|전부|모두).*창.*(내려|최소화)", s):
+        return "창을 모두 최소화했어요." if minimize_all_windows() else "창 최소화에 실패했어요."
+
+    if re.search(r"(맨\s*앞|현재|앞에\s*있는|포커스된).*(창|윈도우).*(꺼|닫|종료)", s) or compact in {"창꺼줘", "창닫아줘", "현재창꺼줘", "현재창닫아줘"}:
+        return "맨 앞 창을 닫았어요." if close_foreground_window() else "맨 앞 창을 닫지 못했어요."
+
+    if not re.search(r"(꺼\s*줘|꺼줘|닫아\s*줘|닫아줘|종료\s*해\s*줘|종료해줘|끄기|꺼)", s):
+        return None
+
+    specs = app_specs or load_app_specs()
+    spec = match_app(s, specs)
+    if not spec:
+        return None
+
+    hints = []
+    if spec.window_title:
+        hints.append(spec.window_title)
+    hints.extend(spec.aliases or [])
+    ok = close_window_by_app(spec.process_name, hints)
+    app_name = spec.aliases[0] if spec.aliases else spec.key
+    return f"{app_name} 창을 닫았어요." if ok else f"{app_name} 창을 찾지 못했어요."
+
+
+def handle_media_control(text: str) -> Optional[str]:
+    """Windows media key 기반 재생 제어."""
+    s = (text or "").strip()
+    if not s:
+        return None
+
+    media_context = re.search(r"(영상|음악|노래|미디어|재생|일시\s*정지|일시정지|다음\s*곡|이전\s*곡)", s)
+    if not media_context:
+        return None
+
+    try:
+        from automation import media_control
+    except Exception as e:
+        return f"미디어 제어 모듈 로드 실패: {e}"
+
+    if re.search(r"(다음\s*곡|다음\s*노래|넘겨\s*줘|넘겨줘|next)", s, re.IGNORECASE):
+        return "다음 트랙으로 넘겼어요." if media_control.next_track() else "다음 트랙 제어에 실패했어요."
+    if re.search(r"(이전\s*곡|이전\s*노래|뒤로|previous|prev)", s, re.IGNORECASE):
+        return "이전 트랙으로 넘겼어요." if media_control.previous_track() else "이전 트랙 제어에 실패했어요."
+    if re.search(r"(멈춰\s*줘|멈춰줘|정지|일시\s*정지|일시정지|재생\s*해\s*줘|재생해줘|틀어\s*줘|틀어줘|pause|play)", s, re.IGNORECASE):
+        return "미디어 재생/일시정지를 전환했어요." if media_control.play_pause() else "미디어 제어에 실패했어요."
+
+    return None
+
+
+def handle_screen_capture(text: str) -> Optional[str]:
+    """현재 화면 캡처 저장."""
+    s = (text or "").strip()
+    if not s or not re.search(r"(화면|스크린|모니터).*(캡처|캡쳐|스크린샷|저장)", s):
+        return None
+    try:
+        from vision.screen_tools import save_screenshot
+        path = save_screenshot(monitor_index=1)
+        return f"화면을 캡처했어요: {path}"
+    except Exception as e:
+        return f"화면 캡처 실패: {e}"
+
+
+def handle_screen_highlight(text: str) -> Optional[str]:
+    """화면 내 텍스트 OCR 검색 후 overlay 강조."""
+    s = (text or "").strip()
+    if not s:
+        return None
+
+    if re.search(r"(강조|하이라이트).*(꺼|끄|제거|닫|없애)|이제\s*됐어", s):
+        try:
+            from vision.highlight_overlay import clear_highlights
+            return "강조를 껐어요." if clear_highlights() else "꺼진 강조가 없어요."
+        except Exception as e:
+            return f"강조 제거 실패: {e}"
+
+    if not re.search(r"(있니|있어|찾아\s*줘|찾아줘|강조|하이라이트|어디)", s):
+        return None
+    if not re.search(r"(화면|여기|현재|지금|단어|텍스트|글자|문구|찾아|강조|하이라이트)", s):
+        return None
+
+    try:
+        from vision.highlight_overlay import HighlightRect, show_highlights
+        from vision.screen_tools import extract_quoted_or_target, find_text_on_screen
+    except Exception as e:
+        return f"화면 강조 모듈 로드 실패: {e}"
+
+    target = extract_quoted_or_target(s)
+    if not target:
+        return None
+
+    try:
+        hits = find_text_on_screen(target, monitor_index=1)
+        if not hits:
+            return f"화면에서 '{target}'를 찾지 못했어요."
+
+        import pyautogui as pag
+
+        width, height = pag.size()
+        rects = [HighlightRect(hit.x, hit.y, hit.w, hit.h, hit.text) for hit in hits[:12]]
+        show_highlights(rects, int(width), int(height))
+        return f"화면에서 '{target}'를 {len(hits)}개 찾았어요. 보라색으로 강조했어요."
+    except Exception as e:
+        return f"화면 텍스트 검색 실패: {e}"
 
 
 def handle_youtube_toggle(text: str) -> Optional[str]:

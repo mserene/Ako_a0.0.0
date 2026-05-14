@@ -183,18 +183,159 @@
       "args": [],
       "fallback_uri": null
     },
-    "EqualizerAPO": {
+    "explorer": {
       "aliases": [
-        "마이크 설정"
+        "파일 탐색기",
+        "탐색기",
+        "explorer"
       ],
-      "process_name": "EqualizerAPO.exe",
-      "window_title": "Equalizer APO Configuration Editor",
+      "process_name": "explorer.exe",
+      "window_title": "Explorer",
       "candidates": [
-        "%PROGRAMFILES%\\EqualizerAPO\\Configuration Editor\\EqualizerAPO.exe",
-        "%PROGRAMFILES(X86)%\\EqualizerAPO\\Configuration Editor\\EqualizerAPO.exe"
+        "%WINDIR%\\explorer.exe"
       ],
       "args": [],
       "fallback_uri": null
+    },
+    "notion": {
+      "aliases": [
+        "노션",
+        "notion"
+      ],
+      "process_name": "Notion.exe",
+      "window_title": "Notion",
+      "candidates": [
+        "%LOCALAPPDATA%\\Programs\\Notion\\Notion.exe",
+        "%LOCALAPPDATA%\\Notion\\Notion.exe"
+      ],
+      "args": [],
+      "fallback_uri": "https://www.notion.so"
+    },
+    "github": {
+      "aliases": [
+        "깃허브",
+        "github"
+      ],
+      "process_name": "",
+      "window_title": "GitHub",
+      "candidates": [],
+      "args": [],
+      "fallback_uri": "https://github.com"
+    },
+    "windows_settings": {
+      "aliases": [
+        "설정",
+        "윈도우 설정"
+      ],
+      "process_name": "SystemSettings.exe",
+      "window_title": "Settings",
+      "candidates": [],
+      "args": [],
+      "fallback_uri": "ms-settings:"
+    },
+    "logitech_ghub": {
+      "aliases": [
+        "로지텍",
+        "지허브",
+        "Logitech G HUB"
+      ],
+      "process_name": "lghub.exe",
+      "window_title": "Logitech G HUB",
+      "candidates": [
+        "%PROGRAMFILES%\\LGHUB\\lghub.exe",
+        "%PROGRAMFILES%\\Logitech Gaming Software\\LCore.exe"
+      ],
+      "args": [],
+      "fallback_uri": null
+    },
+    "dead_by_daylight": {
+      "aliases": [
+        "데바데",
+        "dead by daylight"
+      ],
+      "process_name": "DeadByDaylight-Win64-Shipping.exe",
+      "window_title": "Dead by Daylight",
+      "candidates": [],
+      "args": [],
+      "fallback_uri": "steam://rungameid/381210"
+    },
+    "minecraft": {
+      "aliases": [
+        "마크",
+        "마인크래프트",
+        "minecraft"
+      ],
+      "process_name": "MinecraftLauncher.exe",
+      "window_title": "Minecraft",
+      "candidates": [
+        "%PROGRAMFILES(X86)%\\Minecraft Launcher\\MinecraftLauncher.exe",
+        "%PROGRAMFILES%\\Minecraft Launcher\\MinecraftLauncher.exe"
+      ],
+      "args": [],
+      "fallback_uri": "minecraft:"
+    },
+    "chatgpt": {
+      "aliases": [
+        "지피티",
+        "챗지피티",
+        "chatgpt"
+      ],
+      "process_name": "",
+      "window_title": "ChatGPT",
+      "candidates": [],
+      "args": [],
+      "fallback_uri": "https://chatgpt.com"
+    },
+    "youtube": {
+      "aliases": [
+        "유튜브",
+        "youtube"
+      ],
+      "process_name": "",
+      "window_title": "YouTube",
+      "candidates": [],
+      "args": [],
+      "fallback_uri": "https://youtube.com"
+    },
+    "roblox": {
+      "aliases": [
+        "로블록스",
+        "roblox"
+      ],
+      "process_name": "RobloxPlayerBeta.exe",
+      "window_title": "Roblox",
+      "candidates": [
+        "%LOCALAPPDATA%\\Roblox\\Versions\\*\\RobloxPlayerBeta.exe"
+      ],
+      "args": [],
+      "fallback_uri": "https://roblox.com"
+    },
+    "clipstudio": {
+      "aliases": [
+        "클립스튜디오",
+        "clipstudio"
+      ],
+      "process_name": "CLIPStudio.exe",
+      "window_title": "CLIP STUDIO",
+      "candidates": [
+        "%PROGRAMFILES%\\CELSYS\\CLIP STUDIO 1.5\\CLIP STUDIO\\CLIPStudio.exe",
+        "%PROGRAMFILES%\\CELSYS\\CLIP STUDIO\\CLIP STUDIO\\CLIPStudio.exe"
+      ],
+      "args": [],
+      "fallback_uri": null
+    },
+    "instagram": {
+      "aliases": [
+        "인스타",
+        "인스타그램",
+        "instagram"
+      ],
+      "process_name": "",
+      "window_title": "Instagram",
+      "candidates": [],
+      "args": [],
+      "fallback_uri": "https://instagram.com"
     }
+    
   }
 }

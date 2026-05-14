@@ -38,6 +38,10 @@ def run_actions(text: str) -> str:
 
     try:
         from command_actions import (
+            handle_window_control,
+            handle_media_control,
+            handle_screen_capture,
+            handle_screen_highlight,
             handle_youtube_toggle,
             handle_ui_click,
             handle_open_app,
@@ -48,7 +52,41 @@ def run_actions(text: str) -> str:
         logging.exception("command_actions import failed")
         return f"명령 모듈 로드 실패: {e}"
 
-    # 0) 유튜브 토글
+    # 0) 창/미디어/화면 제어
+    try:
+        specs = load_app_specs()
+        r = handle_window_control(txt, specs)
+        if r:
+            return r
+    except Exception as e:
+        logging.exception("window control failed")
+        return f"창 제어 오류: {e}"
+
+    try:
+        r = handle_media_control(txt)
+        if r:
+            return r
+    except Exception as e:
+        logging.exception("media control failed")
+        return f"미디어 제어 오류: {e}"
+
+    try:
+        r = handle_screen_capture(txt)
+        if r:
+            return r
+    except Exception as e:
+        logging.exception("screen capture failed")
+        return f"화면 캡처 오류: {e}"
+
+    try:
+        r = handle_screen_highlight(txt)
+        if r:
+            return r
+    except Exception as e:
+        logging.exception("screen highlight failed")
+        return f"화면 강조 오류: {e}"
+
+    # 1) 유튜브 토글
     try:
         r = handle_youtube_toggle(txt)
         if r:
@@ -57,7 +95,7 @@ def run_actions(text: str) -> str:
         logging.exception("youtube toggle failed")
         return f"유튜브 토글 오류: {e}"
 
-    # 1) UI 클릭
+    # 2) UI 클릭
     try:
         r = handle_ui_click(txt)
         if r:
@@ -66,7 +104,7 @@ def run_actions(text: str) -> str:
         logging.exception("ui click failed")
         return f"UI 클릭 오류: {e}"
 
-    # 2) 앱 실행/포커스
+    # 3) 앱 실행/포커스
     try:
         specs = load_app_specs()
         r = handle_open_app(txt, specs)
@@ -76,7 +114,7 @@ def run_actions(text: str) -> str:
         logging.exception("open app failed")
         return f"앱 실행 오류: {e}"
 
-    # 3) 검색
+    # 4) 검색
     try:
         r = handle_search_command(txt)
         if r:
@@ -85,7 +123,7 @@ def run_actions(text: str) -> str:
         logging.exception("search failed")
         return f"검색 오류: {e}"
 
-    # 4) 그래도 못 잡으면 LLM 에이전트
+    # 5) 그래도 못 잡으면 LLM 에이전트
     try:
         from llm_agent import run_agent
         return run_agent(txt)

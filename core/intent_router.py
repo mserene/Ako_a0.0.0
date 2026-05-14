@@ -96,15 +96,26 @@ def _looks_like_real_command(text: str, compact: str) -> bool:
     if _has_any(text, chat_like):
         return False
 
+    if _has_any(text, ("화면", "여기", "현재", "지금")) and _has_any(text, ("단어", "텍스트", "글자", "문구")) and _has_any(text, ("있니", "있어", "찾아", "강조", "하이라이트", "어디")):
+        return True
+
+    if "창" in text and _has_any(text, ("다", "모두", "전부")) and _has_any(text, ("내려", "최소화")):
+        return True
+
+    if "창" in text and _has_any(text, ("꺼줘", "닫아", "종료", "닫")):
+        return True
+
     app_targets = (
         "크롬", "chrome", "유튜브", "youtube", "디스코드", "discord", "카카오톡",
         "메모장", "계산기", "스포티파이", "spotify", "치지직", "브라우저",
         "탐색기", "파일", "폴더", "창", "탭", "버튼", "링크", "주소창",
+        "화면", "스크린", "모니터", "영상", "음악", "노래", "미디어",
     )
     action_words = (
         "열어", "켜줘", "켜", "꺼줘", "꺼", "실행", "재생", "일시정지",
         "눌러", "클릭", "닫아", "입력", "검색", "삭제", "가줘", "이동",
-        "앞으로", "포커스", "띄워", "최소화", "최대화",
+        "앞으로", "포커스", "띄워", "최소화", "최대화", "캡처", "캡쳐",
+        "스크린샷", "찾아", "강조", "하이라이트", "멈춰", "넘겨",
     )
 
     if _has_any(text, app_targets) and _has_any(text, action_words):

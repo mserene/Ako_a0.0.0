@@ -45,7 +45,11 @@ _TOOLS_DESC = """
 2. search: 웹/앱 검색
 3. ui_click: 화면의 버튼/텍스트 클릭
 4. youtube_toggle: 유튜브 재생/일시정지 토글
-5. chat: 위 툴에 해당하지 않는 일상 대화, 질문, 잡담
+5. window_control: 창 닫기/최소화
+6. media_control: 영상/음악 재생 제어
+7. screen_capture: 화면 캡처 저장
+8. screen_highlight: 화면 텍스트 검색/강조/강조 해제
+9. chat: 위 툴에 해당하지 않는 일상 대화, 질문, 잡담
 
 [응답 형식]
 반드시 아래 JSON 형식으로만 응답하세요.
@@ -107,6 +111,10 @@ class AkoAgent:
             from command_actions import (
                 handle_open_app,
                 handle_search_command,
+                handle_window_control,
+                handle_media_control,
+                handle_screen_capture,
+                handle_screen_highlight,
                 handle_ui_click,
                 handle_youtube_toggle,
                 load_app_specs,
@@ -125,6 +133,23 @@ class AkoAgent:
         if tool == "search":
             result = handle_search_command(text)
             return result or "검색어를 이해하지 못했어요."
+
+        if tool == "window_control":
+            specs = load_app_specs()
+            result = handle_window_control(text, specs)
+            return result or "창 제어 명령을 이해하지 못했어요."
+
+        if tool == "media_control":
+            result = handle_media_control(text)
+            return result or "미디어 제어 명령을 이해하지 못했어요."
+
+        if tool == "screen_capture":
+            result = handle_screen_capture(text)
+            return result or "화면 캡처 명령을 이해하지 못했어요."
+
+        if tool == "screen_highlight":
+            result = handle_screen_highlight(text)
+            return result or "화면에서 찾을 텍스트를 이해하지 못했어요."
 
         if tool == "ui_click":
             result = handle_ui_click(text)
