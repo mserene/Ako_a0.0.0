@@ -1,5 +1,5 @@
 # 빌드 산출물
-dist/
+dist
 build/
 .build/
 .build_runtime/
