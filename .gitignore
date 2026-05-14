@@ -22,6 +22,8 @@ assistant_prefs.json
 # 대화 히스토리 (개인정보 포함 가능)
 assistant_memory.json
 memory_state.json
+debug_ocr/
+
 
 # Whisper 모델 캐시 (용량 큼)
 models/
