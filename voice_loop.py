@@ -48,11 +48,11 @@ class VoiceConfig:
     max_record_sec: float = field(default_factory=lambda: _env_float("AKO_STT_MAX_RECORD_SEC", 8.0, minimum=0.5))
     silence_sec: float = field(default_factory=lambda: _env_float("AKO_STT_SILENCE_SEC", 0.80, minimum=0.1))
     silence_threshold: float = 0.010
-    speech_start_threshold: float = field(default_factory=lambda: _env_float("AKO_STT_SPEECH_START_THRESHOLD", 0.020, minimum=0.0))
+    speech_start_threshold: float = field(default_factory=lambda: _env_float("AKO_STT_SPEECH_START_THRESHOLD", 0.015, minimum=0.0))
     speech_end_threshold: float = field(default_factory=lambda: _env_float("AKO_STT_SPEECH_END_THRESHOLD", 0.009, minimum=0.0))
-    candidate_sec: float = field(default_factory=lambda: _env_float("AKO_STT_CANDIDATE_SEC", 0.30, minimum=0.0))
-    min_speech_sec: float = field(default_factory=lambda: _env_float("AKO_STT_MIN_SPEECH_SEC", 0.40, minimum=0.0))
-    pre_roll_sec: float = field(default_factory=lambda: _env_float("AKO_STT_PRE_ROLL_SEC", 0.30, minimum=0.0))
+    candidate_sec: float = field(default_factory=lambda: _env_float("AKO_STT_CANDIDATE_SEC", 0.22, minimum=0.0))
+    min_speech_sec: float = field(default_factory=lambda: _env_float("AKO_STT_MIN_SPEECH_SEC", 0.25, minimum=0.0))
+    pre_roll_sec: float = field(default_factory=lambda: _env_float("AKO_STT_PRE_ROLL_SEC", 0.45, minimum=0.0))
     rms_smoothing: float = field(default_factory=lambda: _env_float("AKO_STT_RMS_SMOOTHING", 0.8, minimum=0.0, maximum=0.98))
     rms_release_smoothing: float = field(default_factory=lambda: _env_float("AKO_STT_RMS_RELEASE_SMOOTHING", 0.4, minimum=0.0, maximum=0.98))
     debug_audio: bool = field(default_factory=lambda: _env_bool("AKO_STT_DEBUG_AUDIO", False))
@@ -167,10 +167,21 @@ _whisper_cache: dict = {}
 _whisper_lock = threading.Lock()
 
 
+def _effective_whisper_model_name(model_name: str) -> str:
+    model_name = (model_name or "small").strip() or "small"
+    if _env_bool("AKO_WHISPER_ALLOW_SMALLER_MODEL", False):
+        return model_name
+    if model_name.lower() in {"tiny", "tiny.en", "base", "base.en"}:
+        if _env_bool("AKO_STT_DEBUG_TRANSCRIBE", False):
+            print(f"[VOICE] Korean STT quality: upgrading Whisper model {model_name!r} -> 'small'")
+        return "small"
+    return model_name
+
+
 def _get_whisper_model(model_name: str):
     """WhisperModel을 캐싱해서 반환. 같은 모델/장치/연산 타입이면 재사용."""
     with _whisper_lock:
-        model_name = (model_name or "small").strip() or "small"
+        model_name = _effective_whisper_model_name(model_name)
         device = os.getenv("AKO_WHISPER_DEVICE", "cpu").strip().lower() or "cpu"
         compute_type = os.getenv("AKO_WHISPER_COMPUTE_TYPE", "").strip()
         if not compute_type:
@@ -256,7 +267,6 @@ def _record_until_silence(cfg: VoiceConfig):
 
     frames = []
     pre_roll = deque(maxlen=max(1, int(max(0.0, cfg.pre_roll_sec) / block_sec) + 1))
-    candidate_frames = []
 
     state = waiting
     smooth_rms: float | None = None
@@ -277,6 +287,7 @@ def _record_until_silence(cfg: VoiceConfig):
             f"candidate_sec={candidate_sec:.2f} "
             f"silence_sec={silence_sec:.2f} "
             f"min_speech_sec={min_speech_sec:.2f} "
+            f"pre_roll_sec={cfg.pre_roll_sec:.2f} "
             f"max_record_sec={max_record_sec:.2f} "
             f"attack_smoothing={attack_smoothing:.2f} "
             f"release_smoothing={release_smoothing:.2f}"
@@ -302,33 +313,28 @@ def _record_until_silence(cfg: VoiceConfig):
         else:
             smooth_rms = (smooth_rms * release_smoothing) + (rms * (1.0 - release_smoothing))
 
+        if state != recording:
+            pre_roll.append(mono)
+
         if state == waiting:
             if rms >= speech_start_threshold:
                 state = candidate
-                candidate_frames.clear()
-                candidate_frames.append(mono)
                 candidate_elapsed = chunk_sec
                 active_elapsed = chunk_sec
                 silence_elapsed = 0.0
-            else:
-                pre_roll.append(mono)
 
         elif state == candidate:
-            candidate_frames.append(mono)
             if rms >= speech_start_threshold:
                 candidate_elapsed += chunk_sec
                 active_elapsed += chunk_sec
             else:
                 state = waiting
-                candidate_frames.clear()
                 candidate_elapsed = 0.0
                 active_elapsed = 0.0
                 silence_elapsed = 0.0
             if state == candidate and candidate_elapsed >= candidate_sec:
                 frames.extend(pre_roll)
-                frames.extend(candidate_frames)
                 pre_roll.clear()
-                candidate_frames.clear()
                 state = recording
                 recorded_elapsed = sum(len(frame) for frame in frames) / sr
                 silence_elapsed = 0.0
@@ -365,6 +371,7 @@ def _record_until_silence(cfg: VoiceConfig):
                 f"active={active_elapsed:.2f} "
                 f"silence={silence_elapsed:.2f} "
                 f"record={recorded_elapsed:.2f} "
+                f"pre_roll={sum(len(frame) for frame in pre_roll) / sr:.2f} "
                 f"reason={finish_reason}"
             )
             last_debug_at = stream_elapsed
@@ -457,49 +464,140 @@ def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 999) -> i
 
 
 def _build_initial_prompt() -> str:
-    """Whisper에게 앱/명령 어휘를 미리 알려준다. 결과 치환이 아니라 디코딩 힌트다."""
+    """Whisper에게 짧은 한국어 발화를 자연스럽게 디코딩하도록 힌트를 준다."""
     extra = os.getenv("AKO_WHISPER_INITIAL_PROMPT", "").strip()
     base = (
-        "다음은 한국어 PC 음성 명령입니다. "
-        "앱 이름으로 크롬, 구글 크롬, 디스코드, 디코, 카카오톡, 카톡, 스팀, "
-        "스포티파이, 메모장, 계산기, 유튜브, 롤, 리그 오브 레전드, 발로란트, OBS, "
-        "VS Code, 코드, 그림판, 탐색기가 나올 수 있습니다. "
-        "명령 표현으로 켜줘, 열어줘, 띄워봐, 실행해줘, 앞으로 가져와, 눌러줘, 클릭해줘, 검색해줘가 나올 수 있습니다."
+        "다음은 한국어 음성 대화입니다. "
+        "짧고 자연스러운 한국어 문장으로 인식하세요."
     )
     return f"{base} {extra}".strip() if extra else base
 
 
-def _prepare_audio_for_stt(audio):
-    """마이크 입력을 Whisper가 듣기 쉬운 크기로 정리한다. 특정 단어 보정은 하지 않는다."""
+def _write_debug_wav(audio, samplerate: int) -> None:
+    """Whisper에 넘기는 바로 그 버퍼를 16-bit PCM WAV로 저장한다."""
+    import wave
     import numpy as np
 
+    path = os.getenv("AKO_STT_DEBUG_WAV_PATH", "debug_input.wav").strip() or "debug_input.wav"
     x = np.asarray(audio, dtype=np.float32)
+    if x.size == 0:
+        return
+    if x.ndim > 1:
+        x = x[:, 0] if x.shape[-1] == 1 else np.mean(x, axis=-1)
+    pcm = np.clip(x, -1.0, 1.0)
+    pcm = np.clip(pcm * 32767.0, -32768, 32767).astype(np.int16)
+
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(int(samplerate))
+        wf.writeframes(pcm.tobytes())
+
+    if _env_bool("AKO_STT_DEBUG_AUDIO", False):
+        print(f"[VOICE] wrote debug wav: {os.path.abspath(path)}")
+
+
+def _prepare_audio_for_stt(audio, samplerate: int):
+    """Whisper 입력을 mono float32로 보장한다. 증폭/정규화는 기본적으로 끈다."""
+    import numpy as np
+
+    raw = np.asarray(audio)
+    original_dtype = raw.dtype
+    original_shape = raw.shape
+
+    if raw.ndim == 2:
+        raw = raw[:, 0] if raw.shape[1] == 1 else np.mean(raw, axis=1)
+    elif raw.ndim > 2:
+        raw = np.reshape(raw, (-1, raw.shape[-1]))
+        raw = raw[:, 0] if raw.shape[1] == 1 else np.mean(raw, axis=1)
+
+    x = np.asarray(raw, dtype=np.float32)
     if x.size == 0:
         return x
 
     x = np.nan_to_num(x)
-    x = x - float(np.mean(x))
+    if np.issubdtype(original_dtype, np.integer):
+        max_abs = float(max(abs(np.iinfo(original_dtype).min), np.iinfo(original_dtype).max))
+        if max_abs > 0:
+            x = x / max_abs
 
     rms = float((np.mean(x * x) + 1e-12) ** 0.5)
-    target_rms = float(os.getenv("AKO_WHISPER_TARGET_RMS", "0.08"))
-    max_gain = float(os.getenv("AKO_WHISPER_MAX_GAIN", "6.0"))
-
-    # 너무 작은 음성만 제한적으로 키운다. 이미 큰 음성은 건드리지 않는다.
-    gain = 1.0
-    if rms > 0 and rms < target_rms:
-        gain = min(max_gain, target_rms / max(rms, 1e-6))
-        x = x * gain
-
     peak = float(np.max(np.abs(x))) if x.size else 0.0
-    if peak > 0.98:
-        x = x * (0.98 / peak)
+    gain = 1.0
+
+    if _env_bool("AKO_STT_NORMALIZE", False):
+        x = x - float(np.mean(x))
+        rms = float((np.mean(x * x) + 1e-12) ** 0.5)
+        target_rms = float(os.getenv("AKO_WHISPER_TARGET_RMS", "0.08"))
+        max_gain = float(os.getenv("AKO_WHISPER_MAX_GAIN", "6.0"))
+        if rms > 0 and rms < target_rms:
+            gain = min(max_gain, target_rms / max(rms, 1e-6))
+            x = x * gain
+
+        peak = float(np.max(np.abs(x))) if x.size else 0.0
+        if peak > 0.98:
+            x = x * (0.98 / peak)
 
     if _env_bool("AKO_STT_DEBUG_AUDIO", False):
         new_rms = float((np.mean(x * x) + 1e-12) ** 0.5)
         new_peak = float(np.max(np.abs(x))) if x.size else 0.0
-        print(f"[VOICE] audio rms={rms:.4f}->{new_rms:.4f} peak={peak:.4f}->{new_peak:.4f} gain={gain:.2f}")
+        print(
+            "[VOICE] audio "
+            f"shape={original_shape}->{x.shape} "
+            f"dtype={original_dtype}->float32 "
+            f"sr={samplerate} "
+            f"normalize={_env_bool('AKO_STT_NORMALIZE', False)} "
+            f"rms={rms:.4f}->{new_rms:.4f} "
+            f"peak={peak:.4f}->{new_peak:.4f} "
+            f"min={float(np.min(x)):.4f} "
+            f"max={float(np.max(x)):.4f} "
+            f"gain={gain:.2f}"
+        )
 
     return x.astype(np.float32)
+
+
+def _trim_trailing_silence_for_stt(audio, samplerate: int, threshold: float):
+    """Whisper에 넘기기 전 뒤쪽 무음을 짧게 남기고 자른다."""
+    import numpy as np
+
+    x = np.asarray(audio, dtype=np.float32)
+    if x.size == 0 or not _env_bool("AKO_STT_TRIM_TRAILING_SILENCE", True):
+        return x
+
+    sr = int(samplerate)
+    chunk_sec = _env_float("AKO_STT_TRIM_CHUNK_SEC", 0.05, minimum=0.01, maximum=0.20)
+    keep_sec = _env_float("AKO_STT_TRAILING_KEEP_SEC", 0.25, minimum=0.0, maximum=1.0)
+    min_keep_sec = _env_float("AKO_STT_TRIM_MIN_KEEP_SEC", 0.35, minimum=0.05, maximum=3.0)
+    chunk = max(1, int(sr * chunk_sec))
+    keep = max(0, int(sr * keep_sec))
+    min_keep = min(len(x), max(1, int(sr * min_keep_sec)))
+    end = len(x)
+    scan_end = end
+    threshold = max(0.0, float(threshold))
+
+    while scan_end - chunk >= min_keep:
+        start = scan_end - chunk
+        tail = x[start:scan_end]
+        tail_rms = float((np.mean(tail * tail) + 1e-12) ** 0.5)
+        if tail_rms > threshold:
+            break
+        scan_end = start
+
+    trimmed_end = min(end, max(min_keep, scan_end + keep))
+    if trimmed_end < end:
+        if _env_bool("AKO_STT_DEBUG_AUDIO", False):
+            before = end / sr
+            after = trimmed_end / sr
+            print(
+                "[VOICE] trim trailing silence "
+                f"{before:.2f}s->{after:.2f}s "
+                f"threshold={threshold:.5f} "
+                f"keep={keep_sec:.2f}s"
+            )
+        return x[:trimmed_end]
+
+    return x
 
 
 # -----------------------------------------------------------------------------
@@ -509,9 +607,20 @@ def _transcribe(audio, cfg: VoiceConfig) -> str:
     """캐싱된 WhisperModel로 STT 수행. 보정 치환 없이 인식 품질 설정만 강화한다."""
     import numpy as np
 
-    audio = _prepare_audio_for_stt(audio)
+    audio = _prepare_audio_for_stt(audio, cfg.samplerate)
     if np.asarray(audio).size == 0:
         return ""
+    audio = _trim_trailing_silence_for_stt(audio, cfg.samplerate, cfg.speech_end_threshold)
+
+    if int(cfg.samplerate) != 16000:
+        print(f"[VOICE] warning: raw numpy audio is expected to be 16000 Hz for Whisper, current sr={cfg.samplerate}")
+
+    if _env_bool("AKO_STT_SAVE_DEBUG_WAV", True):
+        try:
+            _write_debug_wav(audio, cfg.samplerate)
+        except Exception as e:
+            if _env_bool("AKO_STT_DEBUG_AUDIO", False):
+                print(f"[VOICE] debug wav write failed: {e}")
 
     try:
         model = _get_whisper_model(cfg.model)
@@ -522,6 +631,7 @@ def _transcribe(audio, cfg: VoiceConfig) -> str:
     best_of = _env_int("AKO_WHISPER_BEST_OF", 5, minimum=1, maximum=10)
     use_vad = _env_bool("AKO_WHISPER_VAD_FILTER", False)
     use_prompt = _env_bool("AKO_WHISPER_USE_INITIAL_PROMPT", True)
+    simple_mode = _env_bool("AKO_WHISPER_SIMPLE_MODE", True)
 
     kwargs = {
         "language": (cfg.language or None),
@@ -530,10 +640,14 @@ def _transcribe(audio, cfg: VoiceConfig) -> str:
         "best_of": best_of,
         "temperature": 0.0,
         "condition_on_previous_text": False,
-        "no_speech_threshold": float(os.getenv("AKO_WHISPER_NO_SPEECH_THRESHOLD", "0.35")),
-        "compression_ratio_threshold": float(os.getenv("AKO_WHISPER_COMPRESSION_RATIO_THRESHOLD", "2.4")),
-        "log_prob_threshold": float(os.getenv("AKO_WHISPER_LOG_PROB_THRESHOLD", "-1.0")),
+        "no_speech_threshold": float(os.getenv("AKO_WHISPER_NO_SPEECH_THRESHOLD", "0.2")),
     }
+
+    if not simple_mode:
+        kwargs.update({
+            "compression_ratio_threshold": float(os.getenv("AKO_WHISPER_COMPRESSION_RATIO_THRESHOLD", "2.4")),
+            "log_prob_threshold": float(os.getenv("AKO_WHISPER_LOG_PROB_THRESHOLD", "-1.0")),
+        })
 
     if use_vad:
         kwargs["vad_parameters"] = {
@@ -555,7 +669,7 @@ def _transcribe(audio, cfg: VoiceConfig) -> str:
         if _env_bool("AKO_STT_DEBUG_TRANSCRIBE", False):
             lang = getattr(info, "language", "")
             prob = getattr(info, "language_probability", 0.0)
-            print(f"[VOICE] stt model={cfg.model} beam={beam_size} vad={use_vad} lang={lang} prob={prob:.2f} text={text}")
+            print(f"[VOICE] stt model={cfg.model} beam={beam_size} best_of={best_of} vad={use_vad} prompt={use_prompt} simple={simple_mode} lang={lang} prob={prob:.2f} text={text}")
 
         return text
     except Exception as e:
