@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Ako"
-#define MyAppVersion "0.1.2"
+#define MyAppVersion "0.1.3"
 #define MyAppPublisher "mserene"
 #define MyAppExeName "Ako-ai.exe"
 #define MyAppLauncherName "Ako-ai_launcher.vbs"
@@ -29,7 +29,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "desktopicon"; Description: "바탕화면 바로가기 만들기"; GroupDescription: "추가 옵션:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\Ako-ai\*"; DestDir: "{app}"; Excludes: "*.log,memory_state.json,Ako-ai_launcher.bat,requirements.txt"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\Ako-ai\*"; DestDir: "{app}"; Excludes: "*.log,memory_state.json,assistant_prefs.json,Ako-ai_launcher.bat,requirements.txt,debug_ocr\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\bootstrap_runtime.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Ako-ai_launcher.vbs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer_assets\{#PythonEmbedZip}"; DestDir: "{app}\runtime_assets"; Flags: ignoreversion
