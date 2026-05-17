@@ -158,7 +158,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,                  # GUI 모드 (디버그 필요 시 True로)
+    console=False,                  # GUI 모드 (디버그 필요 시 True로)
     disable_windowed_traceback=False,
     icon=ico if os.path.exists(ico) else None,
 )
