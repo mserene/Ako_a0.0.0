@@ -1,0 +1,117 @@
+98 INFO: PyInstaller: 6.20.0, contrib hooks: 2026.5
+98 INFO: Python: 3.12.0
+116 INFO: Platform: Windows-11-10.0.26200-SP0
+117 INFO: Python environment: D:\ms_ai\Ako_ai\.venv
+118 INFO: Removing temporary files and cleaning cache in C:\Users\konnn\AppData\Local\pyinstaller
+170 INFO: Module search paths (PYTHONPATH):
+['D:\\ms_ai\\Ako_ai\\.venv\\Scripts\\pyinstaller.exe',
+ 'C:\\Users\\konnn\\AppData\\Local\\Programs\\Python\\Python312\\python312.zip',
+ 'C:\\Users\\konnn\\AppData\\Local\\Programs\\Python\\Python312\\DLLs',
+ 'C:\\Users\\konnn\\AppData\\Local\\Programs\\Python\\Python312\\Lib',
+ 'C:\\Users\\konnn\\AppData\\Local\\Programs\\Python\\Python312',
+ 'D:\\ms_ai\\Ako_ai\\.venv',
+ 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages',
+ 'D:\\ms_ai\\Ako_ai']
+465 INFO: Appending 'datas' from .spec
+470 INFO: checking Analysis
+470 INFO: Building Analysis because Analysis-00.toc is non existent
+470 INFO: Looking for Python shared library...
+470 INFO: Using Python shared library: C:\Users\konnn\AppData\Local\Programs\Python\Python312\python312.dll
+470 INFO: Running Analysis Analysis-00.toc
+470 INFO: Target bytecode optimization level: 0
+470 INFO: Initializing module dependency graph...
+470 INFO: Initializing module graph hook caches...
+480 INFO: Analyzing modules for base_library.zip ...
+1530 INFO: Processing standard module hook 'hook-encodings.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+2712 INFO: Processing standard module hook 'hook-pickle.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+3478 INFO: Processing standard module hook 'hook-heapq.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+3737 INFO: Caching module dependency graph...
+3763 INFO: Analyzing D:\ms_ai\Ako_ai\app.py
+3797 INFO: Processing standard module hook 'hook-_ctypes.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+3846 INFO: Processing standard module hook 'hook-numpy.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+4042 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+4043 INFO: SetuptoolsInfo: initializing cached setuptools info...
+4621 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+4724 INFO: Processing standard module hook 'hook-xml.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+5301 INFO: Processing standard module hook 'hook-difflib.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+5581 INFO: Processing standard module hook 'hook-sysconfig.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+5635 INFO: Processing standard module hook 'hook-platform.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+6700 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+6882 INFO: Processing standard module hook 'hook-PIL.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+6946 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+7230 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+7334 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+7477 INFO: Processing standard module hook 'hook-cv2.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+7852 INFO: Processing pre-find-module-path hook 'hook-tkinter.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+7852 INFO: TclTkInfo: initializing cached Tcl/Tk info...
+8097 INFO: Processing standard module hook 'hook-_tkinter.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+8114 INFO: Processing standard module hook 'hook-urllib3.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+8173 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8173 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+8177 INFO: Processing standard module hook 'hook-setuptools.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+8186 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8205 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8205 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+8212 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8212 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+8356 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8491 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+8491 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8616 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8617 INFO: Setuptools: 'importlib_metadata' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.importlib_metadata'!
+8637 INFO: Processing standard module hook 'hook-setuptools._vendor.importlib_metadata.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+8654 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8654 INFO: Setuptools: 'zipp' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.zipp'!
+8804 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8804 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+9105 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+9105 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+9463 INFO: Processing standard module hook 'hook-certifi.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+9626 INFO: Analyzing hidden import 'ctranslate2'
+9626 ERROR: Hidden import 'ctranslate2' not found
+9626 INFO: Analyzing hidden import 'tkinter.ttk'
+9645 INFO: Processing module hooks (post-graph stage)...
+9848 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+10006 INFO: Processing standard module hook 'hook-_tkinter.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks'
+10016 INFO: Performing binary vs. data reclassification (1067 entries)
+10091 INFO: Looking for ctypes DLLs
+10121 INFO: Analyzing run-time hooks ...
+10123 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+10125 INFO: Including run-time hook 'pyi_rth__tkinter.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+10126 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+10127 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+10129 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+10152 INFO: Creating base_library.zip...
+10167 INFO: Looking for dynamic libraries
+10734 INFO: Extra DLL search directories (AddDllDirectory): ['D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\numpy.libs', 'D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\cv2\\../../x64/vc17/bin']
+10735 INFO: Extra DLL search directories (PATH): ['D:\\ms_ai\\Ako_ai\\.venv\\Lib\\site-packages\\cv2\\../../x64/vc17/bin']
+11585 INFO: Warnings written to D:\ms_ai\Ako_ai\build\Ako-ai\warn-Ako-ai.txt
+11685 INFO: Graph cross-reference written to D:\ms_ai\Ako_ai\build\Ako-ai\xref-Ako-ai.html
+11731 INFO: checking PYZ
+11732 INFO: Building PYZ because PYZ-00.toc is non existent
+11732 INFO: Building PYZ (ZlibArchive) D:\ms_ai\Ako_ai\build\Ako-ai\PYZ-00.pyz
+12343 INFO: Building PYZ (ZlibArchive) D:\ms_ai\Ako_ai\build\Ako-ai\PYZ-00.pyz completed successfully.
+12354 INFO: checking PKG
+12354 INFO: Building PKG because PKG-00.toc is non existent
+12354 INFO: Building PKG (CArchive) Ako-ai.pkg
+12371 INFO: Building PKG (CArchive) Ako-ai.pkg completed successfully.
+12372 INFO: Bootloader D:\ms_ai\Ako_ai\.venv\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\run.exe
+12372 INFO: checking EXE
+12372 INFO: Building EXE because EXE-00.toc is non existent
+12372 INFO: Building EXE from EXE-00.toc
+12372 INFO: Copying bootloader EXE to D:\ms_ai\Ako_ai\build\Ako-ai\Ako-ai.exe
+12375 INFO: Copying icon to EXE
+12378 INFO: Copying 0 resources to EXE
+12378 INFO: Embedding manifest in EXE
+12380 INFO: Appending PKG archive to EXE
+12383 INFO: Fixing EXE headers
+12434 INFO: Building EXE from EXE-00.toc completed successfully.
+12442 INFO: checking COLLECT
+12442 INFO: Building COLLECT because COLLECT-00.toc is non existent
+12443 INFO: Building COLLECT COLLECT-00.toc
+13568 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+13586 INFO: Build complete! The results are available in: D:\ms_ai\Ako_ai\dist
+[SPEC WARN] datas 경로 없음 (skip): D:\ms_ai\Ako_ai\assistant_memory.json
+[SPEC WARN] datas 경로 없음 (skip): D:\ms_ai\Ako_ai\assistant_prefs.json
+[SPEC WARN] datas 경로 없음 (skip): D:\ms_ai\Ako_ai\.venv\faster_whisper\assets
+[SPEC WARN] datas 경로 없음 (skip): D:\ms_ai\Ako_ai\.venv\faster_whisper\vad.py

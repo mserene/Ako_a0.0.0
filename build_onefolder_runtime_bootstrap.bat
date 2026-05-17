@@ -1,262 +1,41 @@
 @echo off
-setlocal EnableExtensions DisableDelayedExpansion
+cd /d "%~dp0"
 
-rem ============================================================
-rem Ako developer build v14 - Tkinter required
-rem - Refuses Python embeddable/runtime installs for PyInstaller.
-rem - Ako GUI imports tkinter; Python embeddable ZIP has no Tk/Tcl.
-rem - Use full Python 3.12 with tkinter, or portable full Python.
-rem
-rem Optional:
-rem   set BUILD_PYTHON_EXE=D:\Tools\Python312\python.exe
-rem ============================================================
+set PYTHON=.venv\Scripts\python.exe
+set PYINSTALLER=.venv\Scripts\pyinstaller.exe
+set LOG=build_log.txt
 
-set "SCRIPT_DIR=%~dp0"
-set "DIST_DIR=%SCRIPT_DIR%dist\Ako-ai"
-set "BUILD_VENV=%SCRIPT_DIR%.build_venv"
-set "PIP_CACHE_DIR=%SCRIPT_DIR%.build_runtime\pip_cache"
-set "TMP=%SCRIPT_DIR%.build_runtime\tmp"
-set "TEMP=%SCRIPT_DIR%.build_runtime\tmp"
-set "PYTHON_EXE="
-
-echo [INFO] Starting Ako developer build. (v14 tkinter-required)
-echo [INFO] Build Python must be full Python 3.12 with tkinter.
-echo.
-
-if not exist "%SCRIPT_DIR%.build_runtime" mkdir "%SCRIPT_DIR%.build_runtime" >nul 2>nul
-if not exist "%TMP%" mkdir "%TMP%" >nul 2>nul
-if not exist "%PIP_CACHE_DIR%" mkdir "%PIP_CACHE_DIR%" >nul 2>nul
-
-call :find_python
-if errorlevel 1 goto fail
-
-call :verify_tkinter "%PYTHON_EXE%"
-if errorlevel 1 goto fail
-
-call :make_venv
-if errorlevel 1 goto fail
-
-call :install_build_deps
-if errorlevel 1 goto fail
-
-call :run_pyinstaller
-if errorlevel 1 goto fail
-
-call :copy_runtime_files
-if errorlevel 1 goto fail
-
-echo.
-echo [OK] Build done: dist\Ako-ai\Ako-ai.exe
-echo [INFO] Test it directly before making installer:
-echo [INFO]   dist\Ako-ai\Ako-ai.exe
-exit /b 0
-
-:find_python
-echo [INFO] Finding Python 3.12 with tkinter...
-
-if defined BUILD_PYTHON_EXE (
-    if exist "%BUILD_PYTHON_EXE%" (
-        call :reject_bad_python_path "%BUILD_PYTHON_EXE%"
-        if errorlevel 1 exit /b 1
-        "%BUILD_PYTHON_EXE%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)" >nul 2>nul
-        if not errorlevel 1 (
-            set "PYTHON_EXE=%BUILD_PYTHON_EXE%"
-            echo [INFO] Using BUILD_PYTHON_EXE: %BUILD_PYTHON_EXE%
-            exit /b 0
-        )
-    )
-    echo [ERROR] BUILD_PYTHON_EXE is set but is not valid Python 3.12:
-    echo [ERROR] %BUILD_PYTHON_EXE%
+echo [INFO] Checking .venv...
+if not exist "%PYTHON%" (
+    echo [ERROR] .venv not found. Run: py -3.12 -m venv .venv
+    pause
     exit /b 1
 )
 
-py -3.12 -c "import sys; print(sys.executable)" > "%TEMP%\ako_py_path.txt" 2>nul
-if not errorlevel 1 (
-    set /p PYTHON_EXE=<"%TEMP%\ako_py_path.txt"
-    if defined PYTHON_EXE (
-        call :reject_bad_python_path "%PYTHON_EXE%"
-        if not errorlevel 1 (
-            echo [INFO] Found py -3.12: %PYTHON_EXE%
-            exit /b 0
-        )
-        set "PYTHON_EXE="
-    )
+echo [INFO] Checking PyInstaller...
+if not exist "%PYINSTALLER%" (
+    echo [INFO] Installing PyInstaller...
+    .venv\Scripts\pip.exe install pyinstaller
 )
 
-for /f "delims=" %%P in ('where python 2^>nul') do (
-    call :reject_bad_python_path "%%P"
-    if not errorlevel 1 (
-        "%%P" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)" >nul 2>nul
-        if not errorlevel 1 (
-            set "PYTHON_EXE=%%P"
-            echo [INFO] Found python: %%P
-            exit /b 0
-        )
-    )
-)
+echo [INFO] Getting site-packages path...
+for /f "delims=" %%i in ('.venv\Scripts\python.exe -c "import site; print(site.getsitepackages()[0])"') do set AKO_BUILD_SITE_PACKAGES=%%i
+echo [INFO] site-packages: %AKO_BUILD_SITE_PACKAGES%
 
-for %%P in (
-    "%LocalAppData%\Programs\Python\Python312\python.exe"
-    "%ProgramFiles%\Python312\python.exe"
-    "%ProgramFiles(x86)%\Python312\python.exe"
-    "C:\Python312\python.exe"
-) do (
-    if exist "%%~P" (
-        call :reject_bad_python_path "%%~P"
-        if errorlevel 1 exit /b 1
-        "%%~P" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)" >nul 2>nul
-        if not errorlevel 1 (
-            set "PYTHON_EXE=%%~P"
-            echo [INFO] Found python: %%~P
-            exit /b 0
-        )
-    )
-)
+echo [INFO] Cleaning old build...
+if exist build       rmdir /s /q build
+if exist dist\Ako-ai rmdir /s /q dist\Ako-ai
 
-echo [ERROR] Full Python 3.12 was not found.
+echo [INFO] Building...
+.venv\Scripts\pyinstaller.exe --noconfirm --clean Ako-ai.spec > %LOG% 2>&1
+
 echo.
-echo [ERROR] Do NOT use installer_assets\python-3.12.10-embed-amd64.zip for building.
-echo [ERROR] That embed ZIP has no tkinter/Tcl/Tk, so PyInstaller output will crash:
-echo [ERROR] ModuleNotFoundError: No module named 'tkinter'
-echo.
-echo [INFO] Fix options:
-echo [INFO] 1. Install full Python 3.12 from python.org with Tcl/Tk enabled.
-echo [INFO] 2. Or extract portable full Python 3.12 and run:
-echo [INFO]    set BUILD_PYTHON_EXE=D:\path\to\portable-python\python.exe
-echo [INFO]    build_onefolder_runtime_bootstrap.bat
-exit /b 1
-
-:reject_bad_python_path
-set "CANDIDATE=%~1"
-if not defined CANDIDATE exit /b 1
-
-echo %CANDIDATE% | findstr /I /C:"\WindowsApps\" >nul
-if not errorlevel 1 (
-    echo [WARN] Ignoring Microsoft Store Python alias: %CANDIDATE%
-    exit /b 1
-)
-
-echo %CANDIDATE% | findstr /I /C:"\installer_assets\" /C:"\runtime_assets\" /C:"\.build_runtime\python312\" /C:"python-3.12.10-embed" >nul
-if not errorlevel 1 (
-    echo [ERROR] Refusing embeddable/runtime Python for build:
-    echo [ERROR] %CANDIDATE%
-    echo [ERROR] Use full Python 3.12 with Tcl/Tk for PyInstaller.
-    exit /b 1
-)
-
-if exist "%~dp1python312._pth" (
-    echo [ERROR] Refusing embeddable Python for build:
-    echo [ERROR] %CANDIDATE%
-    echo [ERROR] Detected python312._pth next to python.exe.
-    exit /b 1
-)
-
-exit /b 0
-
-:verify_tkinter
-set "CANDIDATE=%~1"
-echo [INFO] Verifying tkinter...
-"%CANDIDATE%" -c "import tkinter; print('TK OK', tkinter.TkVersion)"
-if errorlevel 1 (
+if exist dist\Ako-ai\Ako-ai.exe (
+    echo [OK] Build succeeded: dist\Ako-ai\Ako-ai.exe
+) else (
+    echo [FAIL] Build failed. See build_log.txt
     echo.
-    echo [ERROR] This Python is 3.12, but tkinter is missing:
-    echo [ERROR] %CANDIDATE%
-    echo.
-    echo [ERROR] This Python cannot build Ako GUI.
-    echo [ERROR] Use full Python 3.12 with Tcl/Tk, not Python embeddable ZIP.
-    exit /b 1
-)
-exit /b 0
-
-:make_venv
-echo [INFO] Creating build venv...
-if exist "%BUILD_VENV%" rmdir /s /q "%BUILD_VENV%" >nul 2>nul
-
-"%PYTHON_EXE%" -m venv "%BUILD_VENV%"
-if errorlevel 1 (
-    echo [ERROR] Failed to create build venv.
-    exit /b 1
+    type %LOG%
 )
 
-if not exist "%BUILD_VENV%\Scripts\python.exe" (
-    echo [ERROR] Build venv python.exe was not created.
-    exit /b 1
-)
-
-"%BUILD_VENV%\Scripts\python.exe" -c "import tkinter; print('VENV TK OK')"
-if errorlevel 1 (
-    echo [ERROR] tkinter is missing inside build venv.
-    exit /b 1
-)
-
-exit /b 0
-
-:install_build_deps
-echo [INFO] Installing build dependencies...
-"%BUILD_VENV%\Scripts\python.exe" -m pip install --upgrade pip setuptools wheel --no-cache-dir --cache-dir "%PIP_CACHE_DIR%"
-if errorlevel 1 exit /b 1
-
-if exist "%SCRIPT_DIR%requirements.txt" (
-    "%BUILD_VENV%\Scripts\python.exe" -m pip install --no-cache-dir --cache-dir "%PIP_CACHE_DIR%" -r "%SCRIPT_DIR%requirements.txt"
-    if errorlevel 1 exit /b 1
-)
-
-"%BUILD_VENV%\Scripts\python.exe" -m pip install --no-cache-dir --cache-dir "%PIP_CACHE_DIR%" pyinstaller
-if errorlevel 1 exit /b 1
-
-exit /b 0
-
-:run_pyinstaller
-echo [INFO] Running PyInstaller...
-
-if exist "%SCRIPT_DIR%build" rmdir /s /q "%SCRIPT_DIR%build" >nul 2>nul
-if exist "%SCRIPT_DIR%dist" rmdir /s /q "%SCRIPT_DIR%dist" >nul 2>nul
-
-set "AKO_BUILD_SITE_PACKAGES=%BUILD_VENV%\Lib\site-packages"
-if exist "%SCRIPT_DIR%Ako-ai.spec" (
-    "%BUILD_VENV%\Scripts\python.exe" -m PyInstaller "%SCRIPT_DIR%Ako-ai.spec" --noconfirm
-) else (
-    "%BUILD_VENV%\Scripts\python.exe" -m PyInstaller "%SCRIPT_DIR%app.py" --name "Ako-ai" --onedir --noconfirm --windowed
-)
-
-if errorlevel 1 (
-    echo [ERROR] PyInstaller failed.
-    exit /b 1
-)
-
-if not exist "%DIST_DIR%\Ako-ai.exe" (
-    echo [ERROR] dist\Ako-ai\Ako-ai.exe was not created.
-    exit /b 1
-)
-
-exit /b 0
-
-:copy_runtime_files
-echo [INFO] Copying runtime bootstrap files into dist...
-
-if exist "%SCRIPT_DIR%bootstrap_runtime.bat" (
-    copy /Y "%SCRIPT_DIR%bootstrap_runtime.bat" "%DIST_DIR%\bootstrap_runtime.bat" >nul
-    if errorlevel 1 exit /b 1
-) else (
-    echo [ERROR] bootstrap_runtime.bat not found in project root.
-    exit /b 1
-)
-
-if exist "%SCRIPT_DIR%Ako-ai_launcher.vbs" (
-    copy /Y "%SCRIPT_DIR%Ako-ai_launcher.vbs" "%DIST_DIR%\Ako-ai_launcher.vbs" >nul
-    if errorlevel 1 exit /b 1
-) else (
-    echo [ERROR] Ako-ai_launcher.vbs not found in project root.
-    exit /b 1
-)
-
-rem Do not copy Ako-ai_launcher.bat or requirements.txt into dist.
-rem Runtime bootstrap must not install Python packages on user PCs.
-exit /b 0
-
-:fail
-echo.
-echo [ERROR] Build failed. Check the log above.
-echo.
 pause
-exit /b 1
