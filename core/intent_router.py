@@ -121,6 +121,10 @@ def _looks_like_real_command(text: str, compact: str) -> bool:
     if _has_any(text, app_targets) and _has_any(text, action_words):
         return True
 
+    if re.search(r"(열어|켜|실행|띄워).{0,16}(수\s*있|해\s*줄|가능|할\s*수)", text):
+        if _has_any(text, app_targets):
+            return True
+
     positions = ("왼쪽", "오른쪽", "위", "아래", "중앙", "가운데", "상단", "하단")
     if _has_any(text, positions) and _has_any(text, ("눌러", "클릭", "터치")):
         return True

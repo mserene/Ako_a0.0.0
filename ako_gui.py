@@ -734,8 +734,11 @@ class AkoGUI(tk.Tk):
                 handled = any(k in text for k in command_hints)
 
             if handled:
-                self.controller.handle_text_command(text)
+                result = self.controller.handle_text_command(text)
+                if result:
+                    self._add_message("assistant", result)
                 self.status_line.configure(text="명령 실행 완료")
+                self._set_input_enabled(True)
                 return
 
             self._start_chat_async(text)

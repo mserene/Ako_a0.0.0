@@ -210,24 +210,28 @@ class AkoController:
         self.command_on = bool(on)
         self.log(f"명령창 {'ON' if self.command_on else 'OFF'}")
 
-    def handle_text_command(self, text: str) -> None:
+    def handle_text_command(self, text: str) -> str:
         text = (text or "").strip()
         if not text:
-            return
+            return ""
         if not self.powered_on:
-            self.log("전원이 OFF라서 입력을 무시했어요.")
-            return
+            msg = "전원이 OFF라서 입력을 무시했어요."
+            self.log(msg)
+            return msg
         if not self.command_on:
-            self.log("명령창이 OFF라서 입력을 무시했어요.")
-            return
+            msg = "명령창이 OFF라서 입력을 무시했어요."
+            self.log(msg)
+            return msg
 
         try:
             result = _run_actions(text)
         except Exception as e:
             logging.exception("handle_text_command failed")
-            self.log(f"[Ako] 오류: {e}")
-            return
+            msg = f"[Ako] 오류: {e}"
+            self.log(msg)
+            return msg
         self.log(f"[Ako] {result}")
+        return result or ""
 
     def is_command_text(self, text: str) -> bool:
         """GUI 호환용. 실제 판정은 intent_router가 담당한다."""
@@ -737,6 +741,24 @@ class AkoController:
         intent_result = classify_intent(text)
         intent = intent_result.intent
 
+        try:
+            from command_actions import is_open_or_focus_intent
+        except Exception:
+            is_open_or_focus_intent = lambda _t: False  # type: ignore[assignment]
+
+        if intent == IntentType.COMMAND or is_open_or_focus_intent(text):
+            try:
+                action_result = _run_actions(text)
+                if action_result and not action_result.startswith("명령을 이해하지 못했어요"):
+                    yield action_result
+                    if self._should_store_assistant_reply(action_result, user_text=text):
+                        self._chat_history.add("assistant", action_result)
+                    return
+            except Exception as e:
+                logging.exception("chat_stream command action failed")
+                yield f"명령 실행 오류: {e}"
+                return
+
         remembered_reply = self._memory_store.remember_interaction(text)
         if remembered_reply:
             yield remembered_reply
@@ -823,6 +845,20 @@ class AkoController:
 
         intent_result = classify_intent(text)
         intent = intent_result.intent
+
+        try:
+            from command_actions import is_open_or_focus_intent
+        except Exception:
+            is_open_or_focus_intent = lambda _t: False  # type: ignore[assignment]
+
+        if intent == IntentType.COMMAND or is_open_or_focus_intent(text):
+            try:
+                action_result = _run_actions(text)
+                if action_result and not action_result.startswith("명령을 이해하지 못했어요"):
+                    return action_result
+            except Exception as e:
+                logging.exception("chat command action failed")
+                return f"명령 실행 오류: {e}"
 
         remembered_reply = self._memory_store.remember_interaction(text)
         if remembered_reply:

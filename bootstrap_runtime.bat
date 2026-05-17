@@ -1,8 +1,9 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
+chcp 65001 >nul 2>nul
 
 rem ============================================================
-rem Ako runtime bootstrap v13
+rem Ako runtime bootstrap v14
 rem - First-run visible through VBS launcher.
 rem - DOES NOT pip-install requirements.txt at user runtime.
 rem   Reason: Ako-ai.exe is already built by PyInstaller.
@@ -30,7 +31,7 @@ if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
 if not exist "%RUNTIME_DIR%" mkdir "%RUNTIME_DIR%" >nul 2>nul
 if not exist "%TMP%" mkdir "%TMP%" >nul 2>nul
 
-call :log INFO "Starting Ako runtime bootstrap v13"
+call :log INFO "Starting Ako runtime bootstrap v14"
 
 call :prepare_python
 if errorlevel 1 goto fail
@@ -70,14 +71,22 @@ if not exist "%PY_ZIP%" (
 call :log INFO "Extracting bundled Python zip"
 if not exist "%PY_DIR%" mkdir "%PY_DIR%" >nul 2>nul
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%PY_ZIP%' -DestinationPath '%PY_DIR%' -Force" >>"%LOG%" 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop';" ^
+  "$zip=[System.IO.Path]::GetFullPath('%PY_ZIP%');" ^
+  "$dest=[System.IO.Path]::GetFullPath('%PY_DIR%');" ^
+  "if(-not (Test-Path -LiteralPath $dest)){ New-Item -ItemType Directory -Path $dest -Force | Out-Null };" ^
+  "Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force" >>"%LOG%" 2>&1
 if errorlevel 1 (
     call :log ERROR "Failed to extract Python zip"
-    exit /b 1
+    call :log WARN "Continuing without bundled Python fallback (Ako-ai.exe is self-contained)."
+    exit /b 0
 )
 
 if exist "%PY_DIR%\python312._pth" (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p='%PY_DIR%\python312._pth'; (Get-Content -LiteralPath $p) -replace '^#import site','import site' | Set-Content -LiteralPath $p -Encoding ASCII" >>"%LOG%" 2>&1
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$p=[System.IO.Path]::GetFullPath('%PY_DIR%\python312._pth');" ^
+      "(Get-Content -LiteralPath $p) -replace '^#import site','import site' | Set-Content -LiteralPath $p -Encoding ASCII" >>"%LOG%" 2>&1
 )
 
 "%PY_EXE%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)" >nul 2>nul
@@ -105,7 +114,13 @@ if exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
 )
 
 call :log WARN "Ollama not found. Trying winget install."
+where winget >nul 2>nul
+if errorlevel 1 (
+    call :log WARN "winget is not available on this PC."
+    goto winget_skip
+)
 winget install -e --id Ollama.Ollama --accept-package-agreements --accept-source-agreements >>"%LOG%" 2>&1
+:winget_skip
 
 for /f "delims=" %%P in ('where ollama 2^>nul') do (
     set "OLLAMA_EXE=%%P"
@@ -179,11 +194,20 @@ if not errorlevel 1 (
 call :log INFO "Pulling Ollama model: %MODEL_NAME%"
 call :log INFO "This can take a long time on first run."
 
+set "PULL_TRIES=0"
+:pull_retry
+set /a PULL_TRIES+=1
 "%OLLAMA_EXE%" pull "%MODEL_NAME%" >>"%LOG%" 2>&1
-if errorlevel 1 (
-    call :log ERROR "ollama pull failed: %MODEL_NAME%"
-    exit /b 1
+if not errorlevel 1 goto pull_ok
+if %PULL_TRIES% LSS 3 (
+    call :log WARN "ollama pull retry %PULL_TRIES% for %MODEL_NAME%"
+    timeout /t 5 /nobreak >nul
+    goto pull_retry
 )
+call :log ERROR "ollama pull failed: %MODEL_NAME%"
+call :log ERROR "Check network, disk space, and antivirus. You can run: ollama pull %MODEL_NAME%"
+exit /b 1
+:pull_ok
 
 call :log INFO "Model ready"
 exit /b 0

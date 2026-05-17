@@ -8,8 +8,14 @@ import os
 import sys
 
 if sys.platform == "win32":
-    sys.stdout = open(os.devnull, 'w')
-    sys.stderr = open(os.devnull, 'w')
+    sys.stdout = open(os.devnull, "w")
+    sys.stderr = open(os.devnull, "w")
+    if getattr(sys, "frozen", False):
+        try:
+            import ctypes
+            ctypes.windll.kernel32.FreeConsole()
+        except Exception:
+            pass
 
 def _set_workdir_to_appdir() -> str:
     """배포(PyInstaller one-folder)에서 상대경로가 항상 exe 폴더 기준이 되도록 고정"""
@@ -24,13 +30,16 @@ def _set_workdir_to_appdir() -> str:
 
 _APP_DIR = _set_workdir_to_appdir()
 
+_log_handlers: list[logging.Handler] = [
+    logging.FileHandler("ako.log", encoding="utf-8"),
+]
+if not getattr(sys, "frozen", False):
+    _log_handlers.append(logging.StreamHandler())
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("ako.log", encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
+    handlers=_log_handlers,
 )
 
 

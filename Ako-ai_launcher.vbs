@@ -17,14 +17,12 @@ If Not fso.FileExists(bootstrap) Then
     WScript.Quit 1
 End If
 
-If fso.FileExists(flagPath) Then
-    visibleMode = 0
-    cmd = """" & bootstrap & """ --no-pause"
-Else
-    visibleMode = 1
+If Not fso.FileExists(flagPath) Then
     shell.Popup "Ako first-run setup is starting. This can take several minutes.", 3, "Ako", 64
-    cmd = """" & bootstrap & """"
 End If
+
+visibleMode = 0
+cmd = """" & bootstrap & """ --no-pause"
 
 rc = shell.Run(cmd, visibleMode, True)
 If rc <> 0 Then

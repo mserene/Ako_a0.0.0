@@ -5,11 +5,12 @@ import ctypes.wintypes as wt
 import sys
 from typing import Iterable, List, Optional
 
-import pyautogui as pag
-
 
 WM_CLOSE = 0x0010
 SW_RESTORE = 9
+VK_LWIN = 0x5B
+VK_M = 0x4D
+KEYEVENTF_KEYUP = 0x0002
 
 try:
     _user32 = ctypes.WinDLL("user32", use_last_error=True) if sys.platform == "win32" else None
@@ -63,6 +64,7 @@ def _process_image_name(pid: int) -> str:
     try:
         import subprocess
 
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
         cp = subprocess.run(
             ["tasklist", "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
             stdout=subprocess.PIPE,
@@ -70,6 +72,7 @@ def _process_image_name(pid: int) -> str:
             text=True,
             errors="ignore",
             check=False,
+            creationflags=flags,
         )
         line = (cp.stdout or "").strip().splitlines()
         if not line:
@@ -98,8 +101,13 @@ def close_foreground_window() -> bool:
 
 
 def minimize_all_windows() -> bool:
+    if _user32 is None:
+        return False
     try:
-        pag.hotkey("win", "m")
+        _user32.keybd_event(VK_LWIN, 0, 0, 0)
+        _user32.keybd_event(VK_M, 0, 0, 0)
+        _user32.keybd_event(VK_M, 0, KEYEVENTF_KEYUP, 0)
+        _user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
         return True
     except Exception:
         return False

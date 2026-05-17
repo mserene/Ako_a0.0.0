@@ -28,6 +28,11 @@ import subprocess
 import sys
 import time
 import urllib.parse
+import webbrowser
+
+_WIN_SUBPROC_FLAGS = 0
+if sys.platform == "win32":
+    _WIN_SUBPROC_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -36,14 +41,50 @@ from typing import Dict, List, Optional, Tuple
 # - app_commands.json, search_sites.json 같은 파일은 exe 옆에 둔다.
 # - 현재 작업 디렉터리가 달라도 항상 올바르게 로드되도록 base dir로 보정한다.
 # -------------------------------------------------------------------------
+def _app_data_base_dirs() -> List[str]:
+    """Search order for bundled JSON/config next to source, exe, or PyInstaller _internal."""
+    dirs: List[str] = []
+    seen: set[str] = set()
+
+    def _add(path: str) -> None:
+        path = os.path.abspath(path)
+        key = os.path.normcase(path)
+        if key in seen or not os.path.isdir(path):
+            return
+        seen.add(key)
+        dirs.append(path)
+
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            _add(str(meipass))
+        try:
+            exe_dir = os.path.dirname(sys.executable)
+        except Exception:
+            exe_dir = ""
+        if exe_dir:
+            _add(exe_dir)
+            _add(os.path.join(exe_dir, "_internal"))
+    else:
+        _add(os.path.dirname(__file__))
+    _add(os.getcwd())
+    return dirs
+
+
 def _data_path(rel: str) -> str:
     rel = (rel or "").strip()
     if not rel:
         return rel
     if os.path.isabs(rel):
         return rel
+
+    for base_dir in _app_data_base_dirs():
+        candidate = os.path.join(base_dir, rel)
+        if os.path.exists(candidate):
+            return candidate
+
+    # Legacy fallback (exe folder) for clearer error messages downstream
     try:
-        # PyInstaller로 빌드된 경우(sys.frozen==True) exe가 있는 폴더를 기준으로 함
         base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(__file__)
     except Exception:
         base_dir = os.getcwd()
@@ -87,6 +128,7 @@ def _run_hidden(cmd: List[str]) -> subprocess.CompletedProcess:
             stderr=subprocess.PIPE,
             text=True,
             errors="ignore",
+            creationflags=_WIN_SUBPROC_FLAGS,
         )
     except Exception as exc:
         return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr=str(exc))
@@ -116,7 +158,12 @@ def _launch_exe(exe_path_or_name: str, args: Optional[List[str]] = None) -> bool
             target = found
 
     try:
-        subprocess.Popen([target] + list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(
+            [target] + list(args),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=_WIN_SUBPROC_FLAGS,
+        )
         return True
     except Exception:
         return False
@@ -127,10 +174,17 @@ def _start_uri(uri_or_url: str) -> bool:
     if not u:
         return False
     try:
-        _run_hidden(["cmd", "/c", "start", "", u])
+        if sys.platform == "win32":
+            os.startfile(u)
+        else:
+            webbrowser.open(u)
         return True
     except Exception:
-        return False
+        try:
+            ok = bool(webbrowser.open(u))
+            return ok
+        except Exception:
+            return False
 
 
 # -----------------------------------------------------------------------------
@@ -426,7 +480,12 @@ def match_app(text: str, specs: Dict[str, AppSpec]) -> Optional[AppSpec]:
 # 명령 판별(앱 열기/포커스)
 # -----------------------------------------------------------------------------
 def is_open_intent(text: str) -> bool:
-    return bool(re.search(r"(열어|켜|실행|띄워)\s*(줘|줘요|라|줘라)?", text or ""))
+    t = text or ""
+    if re.search(r"(열어|켜|실행|띄워)\s*(줘|줘요|줄|라|줘라)?", t):
+        return True
+    if re.search(r"(열어|켜|실행|띄워).{0,16}(수\s*있|해\s*줄|가능|할\s*수)", t):
+        return True
+    return False
 
 
 def is_focus_intent(text: str) -> bool:
@@ -489,17 +548,22 @@ def handle_open_app(user_text: str, app_specs: Optional[Dict[str, AppSpec]] = No
 
         return f"{app_name} 켜져 있어요. 근데 창을 앞으로 가져오지는 못했어요."
 
-    # 2) 꺼져 있으면 candidates 우선 실행
+    # 2) URI-only 앱(유튜브 등)은 exe 후보보다 fallback_uri 우선
+    if spec.fallback_uri and not _resolve_candidate_list(spec):
+        if _start_uri(spec.fallback_uri):
+            return f"{app_name} 켰어요."
+
+    # 3) 꺼져 있으면 candidates 우선 실행
     for exe_path, args in _resolve_candidate_list(spec):
         if _launch_exe(exe_path, args):
             return f"{app_name} 켰어요."
 
-    # 3) 대체 URI
+    # 4) 대체 URI
     if spec.fallback_uri:
         if _start_uri(spec.fallback_uri):
             return f"{app_name} 켰어요."
 
-    # 4) 마지막으로 process_name 자체를 exe로 가정하고 실행
+    # 5) 마지막으로 process_name 자체를 exe로 가정하고 실행
     if spec.process_name and _launch_exe(spec.process_name, spec.args):
         return f"{app_name} 켰어요."
 

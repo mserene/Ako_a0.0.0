@@ -3,6 +3,7 @@ dist/
 build/
 .build/
 .build_runtime/
+dist_build/
 *.spec.bak
 
 # 가상환경
