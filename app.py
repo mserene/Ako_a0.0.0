@@ -7,6 +7,9 @@ import logging
 import os
 import sys
 
+if sys.platform == "win32":
+    sys.stdout = open(os.devnull, 'w')
+    sys.stderr = open(os.devnull, 'w')
 
 def _set_workdir_to_appdir() -> str:
     """배포(PyInstaller one-folder)에서 상대경로가 항상 exe 폴더 기준이 되도록 고정"""
