@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import threading
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -36,17 +37,72 @@ def _set_dpi_awareness() -> None:
         return
     try:
         import ctypes
-
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
         try:
             import ctypes
-
             ctypes.windll.user32.SetProcessDPIAware()
         except Exception:
             pass
 
 
+# ──────────────────────────────────────────────────────────────
+# OCR 엔진 싱글톤 로더  (PaddleOCR → EasyOCR → pytesseract)
+# ──────────────────────────────────────────────────────────────
+_ocr_engine       = None
+_ocr_engine_lock  = threading.Lock()
+_ocr_engine_mode  = None   # "paddle" | "easy" | "tesseract"
+
+
+def _get_engine():
+    """
+    엔진 인스턴스를 (mode, engine) 형태로 반환.
+    최초 1회만 초기화되며, 이후 호출은 캐시 반환.
+    """
+    global _ocr_engine, _ocr_engine_mode
+    if _ocr_engine_mode is not None:
+        return _ocr_engine_mode, _ocr_engine
+
+    with _ocr_engine_lock:
+        if _ocr_engine_mode is not None:
+            return _ocr_engine_mode, _ocr_engine
+
+        # ① PaddleOCR (권장 — 한국어 UI/게임/자막에 가장 강함)
+        try:
+            from paddleocr import PaddleOCR
+            _ocr_engine = PaddleOCR(use_angle_cls=True, lang="korean", show_log=False)
+            _ocr_engine_mode = "paddle"
+            print("[OCR-Engine] PaddleOCR 로드 완료 ✓")
+            return _ocr_engine_mode, _ocr_engine
+        except Exception as e:
+            print(f"[OCR-Engine] PaddleOCR 없음 ({e}) → EasyOCR 시도")
+
+        # ② EasyOCR
+        try:
+            import easyocr
+            _ocr_engine = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
+            _ocr_engine_mode = "easy"
+            print("[OCR-Engine] EasyOCR 로드 완료 ✓")
+            return _ocr_engine_mode, _ocr_engine
+        except Exception as e:
+            print(f"[OCR-Engine] EasyOCR 없음 ({e}) → pytesseract fallback")
+
+        # ③ pytesseract (기존 fallback)
+        _ocr_engine_mode = "tesseract"
+        print("[OCR-Engine] pytesseract fallback 사용 (PaddleOCR 설치 권장)")
+        return _ocr_engine_mode, None
+
+
+def _pil_to_bgr(img: Image.Image) -> np.ndarray:
+    """PIL(임의 모드) → BGR numpy (PaddleOCR / EasyOCR 입력 형식)."""
+    import cv2
+    arr = np.array(img.convert("RGB"))
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
+
+# ──────────────────────────────────────────────────────────────
+# 화면 캡처
+# ──────────────────────────────────────────────────────────────
 def grab_screen(monitor_index: int = 1) -> np.ndarray:
     """BGRA uint8 이미지(HxWx4) 반환. monitor_index: 1=메인 모니터."""
     _set_dpi_awareness()
@@ -83,13 +139,14 @@ def grab_screen_with_origin(monitor_index: int = 1) -> tuple[np.ndarray, int, in
         return bgra, int(mon["left"]), int(mon["top"]), int(mon["width"]), int(mon["height"])
 
 
+# ──────────────────────────────────────────────────────────────
+# Tesseract 경로 설정 (pytesseract fallback용, 그대로 유지)
+# ──────────────────────────────────────────────────────────────
 def _resolve_tesseract() -> None:
-    """동봉된 Tesseract 또는 시스템 PATH의 Tesseract를 사용한다."""
     cmd = os.environ.get("TESSERACT_CMD")
     if cmd and os.path.exists(cmd):
         pytesseract.pytesseract.tesseract_cmd = cmd
         return
-
     base = os.path.dirname(__file__)
     local_cmd = os.path.join(base, "tools", "tesseract", "tesseract.exe")
     if os.path.exists(local_cmd):
@@ -117,6 +174,9 @@ def _ocr_psms() -> List[int]:
     return out or [6]
 
 
+# ──────────────────────────────────────────────────────────────
+# 이미지 전처리 (기존 그대로)
+# ──────────────────────────────────────────────────────────────
 def _bgra_to_rgb_image(bgra: np.ndarray) -> Image.Image:
     rgb = bgra[:, :, :3][:, :, ::-1]
     return Image.fromarray(rgb)
@@ -142,6 +202,9 @@ def _preprocess_image_for_ocr(img: Image.Image, invert: bool = False, scale_over
     return out, scale
 
 
+# ──────────────────────────────────────────────────────────────
+# 디버그 이미지 저장 (기존 그대로)
+# ──────────────────────────────────────────────────────────────
 def _debug_dir() -> str:
     path = os.getenv("AKO_OCR_DEBUG_DIR", "debug_ocr").strip() or "debug_ocr"
     os.makedirs(path, exist_ok=True)
@@ -172,6 +235,9 @@ def _save_ocr_debug_extra(name: str, img: Image.Image) -> None:
     print(f"[OCR DEBUG] variant image: {path} size={img.size}")
 
 
+# ──────────────────────────────────────────────────────────────
+# 내부 유틸 (기존 그대로)
+# ──────────────────────────────────────────────────────────────
 def _parse_conf(raw: object) -> float:
     try:
         value = str(raw).strip()
@@ -186,6 +252,11 @@ def _console_safe(text: object) -> str:
     return raw.encode(encoding, errors="backslashreplace").decode(encoding, errors="replace")
 
 
+# ──────────────────────────────────────────────────────────────
+# ★ 핵심 교체 함수: _image_to_boxes
+#   pytesseract → PaddleOCR / EasyOCR / pytesseract fallback
+#   반환 타입(List[Box])과 시그니처는 기존과 완전 동일
+# ──────────────────────────────────────────────────────────────
 def _image_to_boxes(
     img: Image.Image,
     lang: str,
@@ -194,26 +265,98 @@ def _image_to_boxes(
     psm: int = 6,
     offset_x: int = 0,
     offset_y: int = 0,
-) -> List[Box]:
+) -> List["Box"]:
+    mode, engine = _get_engine()
+
+    # ── PaddleOCR ──────────────────────────────────────────
+    if mode == "paddle":
+        bgr = _pil_to_bgr(img)
+        raw = engine.ocr(bgr, cls=True)
+        boxes: List[Box] = []
+        if raw and raw[0]:
+            for line in raw[0]:
+                pts, (txt, conf) = line
+                txt = (txt or "").strip()
+                if not txt:
+                    continue
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                x = offset_x + int(min(xs) / scale)
+                y = offset_y + int(min(ys) / scale)
+                w = max(1, int((max(xs) - min(xs)) / scale))
+                h = max(1, int((max(ys) - min(ys)) / scale))
+                # PaddleOCR confidence는 0~1 → 0~100 으로 변환
+                boxes.append(Box(txt, x, y, w, h, float(conf) * 100, variant=variant))
+        return boxes
+
+    # ── EasyOCR ────────────────────────────────────────────
+    if mode == "easy":
+        bgr = _pil_to_bgr(img)
+        raw = engine.readtext(bgr, detail=1)
+        boxes = []
+        for (pts, txt, conf) in raw:
+            txt = (txt or "").strip()
+            if not txt:
+                continue
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            x = offset_x + int(min(xs) / scale)
+            y = offset_y + int(min(ys) / scale)
+            w = max(1, int((max(xs) - min(xs)) / scale))
+            h = max(1, int((max(ys) - min(ys)) / scale))
+            boxes.append(Box(txt, x, y, w, h, float(conf) * 100, variant=variant))
+        return boxes
+
+    # ── pytesseract fallback ────────────────────────────────
+    _resolve_tesseract()
     data = pytesseract.image_to_data(
         img,
         lang=lang,
         output_type=pytesseract.Output.DICT,
         config=_ocr_config(psm=psm),
     )
-    boxes: List[Box] = []
+    boxes = []
     count = len(data.get("text", []))
     for index in range(count):
         raw_text = (data["text"][index] or "").strip()
         if not raw_text:
             continue
         confidence = _parse_conf(data.get("conf", ["-1"] * count)[index])
-        left = offset_x + int(float(data["left"][index]) / scale)
-        top = offset_y + int(float(data["top"][index]) / scale)
-        width = max(1, int(float(data["width"][index]) / scale))
-        height = max(1, int(float(data["height"][index]) / scale))
+        left   = offset_x + int(float(data["left"][index])   / scale)
+        top    = offset_y + int(float(data["top"][index])    / scale)
+        width  = max(1,    int(float(data["width"][index])   / scale))
+        height = max(1,    int(float(data["height"][index])  / scale))
         boxes.append(Box(raw_text, left, top, width, height, confidence, variant=variant))
     return boxes
+
+
+# ──────────────────────────────────────────────────────────────
+# Box 데이터클래스 (기존 그대로)
+# ──────────────────────────────────────────────────────────────
+@dataclass
+class Box:
+    text: str
+    x: int
+    y: int
+    w: int
+    h: int
+    conf: float
+    variant: str = "raw"
+
+    @property
+    def cx(self) -> float:
+        return self.x + self.w / 2
+
+    @property
+    def cy(self) -> float:
+        return self.y + self.h / 2
+
+
+# ──────────────────────────────────────────────────────────────
+# dedup / merge / match 유틸 (기존 그대로)
+# ──────────────────────────────────────────────────────────────
+def _norm(text: str) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", text.strip()).lower()
 
 
 def _dedupe_boxes(boxes: List["Box"]) -> List["Box"]:
@@ -229,7 +372,6 @@ def _dedupe_boxes(boxes: List["Box"]) -> List["Box"]:
 
 
 def _merged_line_boxes(boxes: List["Box"]) -> List["Box"]:
-    """Tesseract가 한국어를 글자별로 쪼갠 경우 인접 박스를 이어 붙인다."""
     tokens = [box for box in boxes if _norm(box.text)]
     if not tokens:
         return []
@@ -312,12 +454,12 @@ def _ocr_variants(raw_img: Image.Image) -> List[_OcrVariant]:
         w, h = raw_img.size
         tile_scale = _env_float("AKO_OCR_TILE_UPSCALE", 3.0, minimum=1.0, maximum=5.0)
         regions = [
-            ("top", 0, 0, w, int(h * 0.28)),
-            ("top_left", 0, 0, int(w * 0.45), int(h * 0.35)),
-            ("left", 0, 0, int(w * 0.35), h),
-            ("center", int(w * 0.15), int(h * 0.10), int(w * 0.70), int(h * 0.75)),
-            ("right", int(w * 0.62), 0, int(w * 0.38), h),
-            ("bottom", 0, int(h * 0.62), w, int(h * 0.38)),
+            ("top",        0,           0,           w,            int(h * 0.28)),
+            ("top_left",   0,           0,           int(w * 0.45), int(h * 0.35)),
+            ("left",       0,           0,           int(w * 0.35), h),
+            ("center",     int(w * 0.15), int(h * 0.10), int(w * 0.70), int(h * 0.75)),
+            ("right",      int(w * 0.62), 0,          int(w * 0.38), h),
+            ("bottom",     0,           int(h * 0.62), w,           int(h * 0.38)),
         ]
         if _env_bool("AKO_OCR_GRID", False):
             cols = int(_env_float("AKO_OCR_GRID_COLS", 3, minimum=1, maximum=6))
@@ -327,8 +469,8 @@ def _ocr_variants(raw_img: Image.Image) -> List[_OcrVariant]:
             cell_h = h / rows
             for row in range(rows):
                 for col in range(cols):
-                    x = max(0, int((col - overlap) * cell_w))
-                    y = max(0, int((row - overlap) * cell_h))
+                    x  = max(0, int((col - overlap) * cell_w))
+                    y  = max(0, int((row - overlap) * cell_h))
                     x2 = min(w, int((col + 1 + overlap) * cell_w))
                     y2 = min(h, int((row + 1 + overlap) * cell_h))
                     regions.append((f"grid_{row}_{col}", x, y, x2 - x, y2 - y))
@@ -344,7 +486,7 @@ def _ocr_variants(raw_img: Image.Image) -> List[_OcrVariant]:
             crop = raw_img.crop((x, y, min(w, x + tw), min(h, y + th)))
             crop_pre, crop_scale = _preprocess_image_for_ocr(crop, scale_override=tile_scale)
             crop_inv, crop_inv_scale = _preprocess_image_for_ocr(crop, invert=True, scale_override=tile_scale)
-            variants.append(_OcrVariant(f"tile_{name}", crop_pre, crop_scale, x, y))
+            variants.append(_OcrVariant(f"tile_{name}",          crop_pre, crop_scale,     x, y))
             variants.append(_OcrVariant(f"tile_{name}_inverted", crop_inv, crop_inv_scale, x, y))
 
     if _env_bool("AKO_OCR_SAVE_DEBUG_VARIANTS", False):
@@ -357,12 +499,8 @@ def _ocr_variants(raw_img: Image.Image) -> List[_OcrVariant]:
 def _print_ocr_debug(target: str, lang: str, raw_boxes: List["Box"], pre_boxes: List["Box"]) -> None:
     if not _env_bool("AKO_OCR_DEBUG", True):
         return
-    print(f"[OCR DEBUG] engine=tesseract cmd={pytesseract.pytesseract.tesseract_cmd} lang={lang} target={target!r}")
-    try:
-        langs = pytesseract.get_languages(config="")
-        print(f"[OCR DEBUG] available_langs={langs}")
-    except Exception as e:
-        print(f"[OCR DEBUG] available_langs_error={type(e).__name__}: {e}")
+    mode, _ = _get_engine()
+    print(f"[OCR DEBUG] engine={mode} lang={lang} target={target!r}")
 
     limit = int(_env_float("AKO_OCR_DEBUG_LIMIT", 0, minimum=0, maximum=100000))
 
@@ -385,8 +523,32 @@ def _print_ocr_debug(target: str, lang: str, raw_boxes: List["Box"], pre_boxes: 
     emit("preprocessed", pre_boxes)
 
 
+# ──────────────────────────────────────────────────────────────
+# ★ 핵심 교체 함수: ocr_lines
+#   pytesseract → PaddleOCR / EasyOCR / pytesseract fallback
+# ──────────────────────────────────────────────────────────────
 def ocr_lines(bgra: np.ndarray, lang: str = "kor+eng") -> List[str]:
     """BGRA(HxWx4) 이미지를 OCR해 텍스트 라인 리스트로 반환한다."""
+    import cv2
+    mode, engine = _get_engine()
+
+    if mode == "paddle":
+        bgr = cv2.cvtColor(bgra[:, :, :3], cv2.COLOR_RGB2BGR)
+        raw = engine.ocr(bgr, cls=True)
+        lines = []
+        if raw and raw[0]:
+            for line in raw[0]:
+                txt = line[1][0].strip()
+                if txt:
+                    lines.append(txt)
+        return lines
+
+    if mode == "easy":
+        bgr = cv2.cvtColor(bgra[:, :, :3], cv2.COLOR_RGB2BGR)
+        raw = engine.readtext(bgr, detail=0, paragraph=True)
+        return [t.strip() for t in raw if t.strip()]
+
+    # pytesseract fallback
     _resolve_tesseract()
     img = _bgra_to_rgb_image(bgra)
     if _env_bool("AKO_OCR_PREPROCESS", True):
@@ -395,39 +557,18 @@ def ocr_lines(bgra: np.ndarray, lang: str = "kor+eng") -> List[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-@dataclass
-class Box:
-    text: str
-    x: int
-    y: int
-    w: int
-    h: int
-    conf: float
-    variant: str = "raw"
-
-    @property
-    def cx(self) -> float:
-        return self.x + self.w / 2
-
-    @property
-    def cy(self) -> float:
-        return self.y + self.h / 2
-
-
-def _norm(text: str) -> str:
-    return re.sub(r"[^0-9A-Za-z가-힣]", "", text.strip()).lower()
-
-
+# ──────────────────────────────────────────────────────────────
+# find_text_boxes (기존 그대로)
+# ──────────────────────────────────────────────────────────────
 def _similarity(a: str, b: str) -> float:
     from difflib import SequenceMatcher
-
     if not a or not b:
         return 0.0
     return SequenceMatcher(None, a, b).ratio()
 
 
 def _match_sort_key(box: "Box", target: str) -> tuple[int, int, float, int]:
-    box_n = _norm(box.text)
+    box_n    = _norm(box.text)
     target_n = _norm(target)
     if box_n == target_n:
         kind = 0
@@ -441,14 +582,10 @@ def _match_sort_key(box: "Box", target: str) -> tuple[int, int, float, int]:
 
 
 def _overlap_fraction(a: "Box", b: "Box") -> float:
-    ax2 = a.x + a.w
-    ay2 = a.y + a.h
-    bx2 = b.x + b.w
-    by2 = b.y + b.h
-    ix1 = max(a.x, b.x)
-    iy1 = max(a.y, b.y)
-    ix2 = min(ax2, bx2)
-    iy2 = min(ay2, by2)
+    ax2 = a.x + a.w; ay2 = a.y + a.h
+    bx2 = b.x + b.w; by2 = b.y + b.h
+    ix1 = max(a.x, b.x); iy1 = max(a.y, b.y)
+    ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
     if ix2 <= ix1 or iy2 <= iy1:
         return 0.0
     inter = (ix2 - ix1) * (iy2 - iy1)
@@ -457,7 +594,7 @@ def _overlap_fraction(a: "Box", b: "Box") -> float:
 
 
 def _box_matches(box_text: str, target: str, allow_contains: bool) -> bool:
-    box_n = _norm(box_text)
+    box_n    = _norm(box_text)
     target_n = _norm(target)
     if not box_n or not target_n:
         return False
@@ -491,8 +628,6 @@ def find_text_boxes(
     - bgra: HxWx4 (mss 캡처 그대로)
     - conf_min: 낮추면 더 많이 잡히지만 오탐 증가
     """
-    _resolve_tesseract()
-
     target_n = _norm(target)
     if not target_n:
         return []
@@ -519,9 +654,9 @@ def find_text_boxes(
             else:
                 processed_boxes.extend(boxes_for_variant)
 
-    raw_boxes = _dedupe_boxes(raw_boxes)
+    raw_boxes       = _dedupe_boxes(raw_boxes)
     processed_boxes = _dedupe_boxes(processed_boxes)
-    merged_boxes = _merged_line_boxes(raw_boxes + processed_boxes)
+    merged_boxes    = _merged_line_boxes(raw_boxes + processed_boxes)
     _print_ocr_debug(target, lang, raw_boxes, processed_boxes + merged_boxes)
 
     boxes: List[Box] = []
@@ -556,59 +691,34 @@ def find_text_boxes(
     return boxes
 
 
+# ──────────────────────────────────────────────────────────────
+# pick_by_direction (기존 그대로)
+# ──────────────────────────────────────────────────────────────
 def pick_by_direction(boxes: List[Box], direction: Optional[str]) -> Optional[Box]:
-    """
-    boxes가 여러 개면 방향으로 하나 선택한다.
-    direction 예:
-      - 왼쪽/오른쪽/위/아래
-      - 왼쪽위/오른쪽위/왼쪽아래/오른쪽아래
-      - 좌상/우상/좌하/우하
-    """
     if not boxes:
         return None
-
     if not direction:
         return max(boxes, key=lambda box: box.conf)
 
     aliases = {
-        "좌": "left",
-        "왼쪽": "left",
-        "우": "right",
-        "오른쪽": "right",
-        "상": "up",
-        "위": "up",
-        "하": "down",
-        "아래": "down",
-        "좌상": "upleft",
-        "좌상단": "upleft",
-        "왼쪽위": "upleft",
-        "우상": "upright",
-        "우상단": "upright",
-        "오른쪽위": "upright",
-        "좌하": "downleft",
-        "좌하단": "downleft",
-        "왼쪽아래": "downleft",
-        "우하": "downright",
-        "우하단": "downright",
-        "오른쪽아래": "downright",
+        "좌": "left",   "왼쪽": "left",
+        "우": "right",  "오른쪽": "right",
+        "상": "up",     "위": "up",
+        "하": "down",   "아래": "down",
+        "좌상": "upleft",   "좌상단": "upleft",   "왼쪽위": "upleft",
+        "우상": "upright",  "우상단": "upright",  "오른쪽위": "upright",
+        "좌하": "downleft", "좌하단": "downleft", "왼쪽아래": "downleft",
+        "우하": "downright","우하단": "downright","오른쪽아래": "downright",
     }
     key = aliases.get(direction.replace(" ", ""), direction)
 
-    if key == "left":
-        return min(boxes, key=lambda box: box.cx)
-    if key == "right":
-        return max(boxes, key=lambda box: box.cx)
-    if key == "up":
-        return min(boxes, key=lambda box: box.cy)
-    if key == "down":
-        return max(boxes, key=lambda box: box.cy)
-    if key == "upleft":
-        return min(boxes, key=lambda box: box.cx + box.cy)
-    if key == "upright":
-        return min(boxes, key=lambda box: (-box.cx) + box.cy)
-    if key == "downleft":
-        return min(boxes, key=lambda box: box.cx - box.cy)
-    if key == "downright":
-        return min(boxes, key=lambda box: (-box.cx) - box.cy)
+    if key == "left":      return min(boxes, key=lambda box: box.cx)
+    if key == "right":     return max(boxes, key=lambda box: box.cx)
+    if key == "up":        return min(boxes, key=lambda box: box.cy)
+    if key == "down":      return max(boxes, key=lambda box: box.cy)
+    if key == "upleft":    return min(boxes, key=lambda box:  box.cx + box.cy)
+    if key == "upright":   return min(boxes, key=lambda box: -box.cx + box.cy)
+    if key == "downleft":  return min(boxes, key=lambda box:  box.cx - box.cy)
+    if key == "downright": return min(boxes, key=lambda box: -box.cx - box.cy)
 
     return max(boxes, key=lambda box: box.conf)
